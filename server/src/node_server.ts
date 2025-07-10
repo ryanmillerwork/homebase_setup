@@ -602,11 +602,10 @@ app.post("/register_client", async (req: Request, res: Response) => {
   const client = await getPoolClientWithRetry();
   try {
     const query = `
-      INSERT INTO comm_status (device, address, last_seen)
-      VALUES ($1, $2, CURRENT_TIMESTAMP)
+      INSERT INTO comm_status (device, address)
+      VALUES ($1, $2)
       ON CONFLICT (device) DO UPDATE
-      SET address = EXCLUDED.address,
-          last_seen = CURRENT_TIMESTAMP;
+      SET address = EXCLUDED.address;
     `;
     await client.query(query, [friendlyName, address]);
     res.status(200).send({ success: true, message: "Client registered successfully." });
