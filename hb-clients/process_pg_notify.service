@@ -1,0 +1,12 @@
+[Unit]
+Description=Start process_pg_notify in tmux session
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/start_process_pg_notify.sh
+RemainAfterExit=yes
+WorkingDirectory=/home/lab
+
+[Install]
+WantedBy=default.target
