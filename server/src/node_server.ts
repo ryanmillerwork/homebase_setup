@@ -590,6 +590,34 @@ app.post("/process_outbox_inference", async (req: Request, res: Response) => {
   }
 });
 
+app.post("/register_client", async (req: Request, res: Response) => {
+  const { friendlyName, address } = req.body;
+
+  if (!friendlyName || !address) {
+    return res.status(400).send({ error: "Missing friendlyName or address" });
+  }
+
+  console.log(`Registering client '${friendlyName}' with address '${address}'`);
+
+  const client = await getPoolClientWithRetry();
+  try {
+    const query = `
+      INSERT INTO comm_status (device, address, last_seen)
+      VALUES ($1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (device) DO UPDATE
+      SET address = EXCLUDED.address,
+          last_seen = CURRENT_TIMESTAMP;
+    `;
+    await client.query(query, [friendlyName, address]);
+    res.status(200).send({ success: true, message: "Client registered successfully." });
+  } catch (err) {
+    console.error(`Error registering client '${friendlyName}':`, err);
+    res.status(500).send({ error: "Database error during client registration." });
+  } finally {
+    client.release();
+  }
+});
+
 // app.listen(3030, () => {
 //   console.log("Server is running on port 3030");
 // });
