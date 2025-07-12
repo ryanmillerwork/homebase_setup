@@ -25,16 +25,21 @@ FALLBACK_CLIENT_ADDRESS_OVERRIDE = ""
 # Friendly name for this client (sent on registration)
 CLIENT_NAME = socket.gethostname()
 
-
-def _select_node_host():
-    for host in (LAN_SERVER_IP, FALLBACK_SERVER_HOST):
-        try:
-            socket.create_connection((host, NODE_PORT), timeout=1).close()
-            print(f"[{datetime.now()}] Selected Node server host: {host}")
-            return host
-        except Exception:
-            print(f"[{datetime.now()}] Could not connect to Node server host: {host}")
-    print(f"[{datetime.now()}] Failed to connect to Node server at both preferred and fallback hosts.")
+def _select_node_host(max_retries=5, delay_seconds=5):
+    for attempt in range(1, max_retries + 1):
+        for host in (LAN_SERVER_IP, FALLBACK_SERVER_HOST):
+            try:
+                socket.create_connection((host, NODE_PORT), timeout=2).close()
+                print(f"[{datetime.now()}] Selected Node server host: {host}")
+                return host
+            except Exception:
+                print(f"[{datetime.now()}] Could not connect to Node server host: {host}")
+        
+        if attempt < max_retries:
+            print(f"[{datetime.now()}] Attempt {attempt} failed. Retrying in {delay_seconds} seconds...")
+            time.sleep(delay_seconds)
+    
+    print(f"[{datetime.now()}] Failed to connect to Node server at both preferred and fallback hosts after {max_retries} attempts.")
     sys.exit(1)
 
 
