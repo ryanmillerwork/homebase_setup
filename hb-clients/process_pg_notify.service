@@ -1,6 +1,7 @@
 [Unit]
 Description=Start process_pg_notify in tmux session
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=oneshot
