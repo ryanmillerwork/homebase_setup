@@ -228,7 +228,7 @@ def send_entire_status_to_node():
     conn.autocommit = True
     try:
         with conn.cursor() as cur:
-            cur.execute("SELECT * FROM status WHERE status_type != 'system_script';")
+            cur.execute("SELECT * FROM status WHERE status_type != 'system_script' AND status_type != 'stiminfo';")
             rows = cur.fetchall()
             if not rows:
                 print("Status table empty, skipping...")
