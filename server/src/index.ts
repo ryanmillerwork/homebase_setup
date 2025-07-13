@@ -389,9 +389,17 @@ async function upsertAnimals(devices: string[], uniqueAnimalOptions: string[]) {
 // Send a message to the dataserver on one of the homebases
 function sendToDS(ipAddress: string, dsPort: number, message: string) {
   const dsSocket = new Socket();
+  const TIMEOUT_MS = 5000; // 5 second timeout
+
+  // Set up timeout to close connection if no response received
+  const timeoutId = setTimeout(() => {
+    console.log(`Timeout reached for DS connection to ${ipAddress}:${dsPort}, closing connection`);
+    if (dsSocket.destroyed === false) {
+      dsSocket.end();
+    }
+  }, TIMEOUT_MS);
 
   dsSocket.connect(dsPort, ipAddress, () => {
-
     console.log('sending: ', message)
     dsSocket.write(message);
 
@@ -402,6 +410,9 @@ function sendToDS(ipAddress: string, dsPort: number, message: string) {
   });
 
   dsSocket.on('data', (data) => {
+    // Clear the timeout since we received a response
+    clearTimeout(timeoutId);
+    
     const response = data.toString();
     console.log('Received from ds:', response);
 
@@ -435,10 +446,14 @@ function sendToDS(ipAddress: string, dsPort: number, message: string) {
   });
 
   dsSocket.on('close', () => {
+    // Clear timeout when connection closes normally
+    clearTimeout(timeoutId);
     console.log('DS connection closed');
   });
 
   dsSocket.on('error', (err) => {
+    // Clear timeout when connection errors
+    clearTimeout(timeoutId);
     console.error('Error with DS:', err);
   });
 }
