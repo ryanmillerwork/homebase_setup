@@ -69,7 +69,6 @@ const HOMEBASE_SUBSCRIPTIONS = [
   'ess/variant_info',
   'ess/param_settings',
   'ess/params',
-  'ess/event_mappings',
 
   // Misc runtime
   'ess/time',
@@ -218,6 +217,7 @@ class HomebaseWS {
   private readonly staleMs = 30000;             // force reconnect if no messages for 30s
   private lastMessageAt = 0;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
+  private lastHeartbeatSentAt = 0;
 
   constructor(hostIp: string, port = 2565, path = '/ws') {
     this.hostIp = hostIp;
@@ -290,6 +290,13 @@ class HomebaseWS {
 
     this.ws.on('message', (data: RawData) => {
       this.lastMessageAt = Date.now();
+      // If a heartbeat was outstanding, clear it and log
+      if (this.heartbeatTimeoutHandle) {
+        const rtt = this.lastHeartbeatSentAt ? (Date.now() - this.lastHeartbeatSentAt) : -1;
+        console.log(`[HBWS] Heartbeat satisfied by inbound message (rtt=${rtt}ms)`);
+        clearTimeout(this.heartbeatTimeoutHandle);
+        this.heartbeatTimeoutHandle = null;
+      }
       const text = typeof data === 'string' ? data : data.toString('utf-8');
       try {
         const msg = JSON.parse(text as string);
@@ -351,6 +358,18 @@ class HomebaseWS {
       const code = (err as any)?.code || (err as any)?.errno || null;
       this.lastErrorCode = code;
       // Error will also lead to close in most cases
+    });
+
+    // Log pongs specifically and clear heartbeat timeout
+    (this.ws as any).on?.('pong', () => {
+      const now = Date.now();
+      const rtt = this.lastHeartbeatSentAt ? (now - this.lastHeartbeatSentAt) : -1;
+      console.log(`[HBWS] Received ws pong (rtt=${rtt}ms)`);
+      this.lastMessageAt = now;
+      if (this.heartbeatTimeoutHandle) {
+        clearTimeout(this.heartbeatTimeoutHandle);
+        this.heartbeatTimeoutHandle = null;
+      }
     });
   }
 
@@ -451,12 +470,16 @@ class HomebaseWS {
     this.heartbeatTimer = setInterval(() => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
       try {
+        this.lastHeartbeatSentAt = Date.now();
+        console.log(`[HBWS] Sending ws ping to ${this.hostIp}`);
         (this.ws as any).ping?.();
       } catch {}
       if (this.heartbeatTimeoutHandle) clearTimeout(this.heartbeatTimeoutHandle);
       this.heartbeatTimeoutHandle = setTimeout(() => {
-        const silentFor = Date.now() - this.lastMessageAt;
-        console.warn(`[HBWS] Heartbeat missed, forcing reconnect (silent ${silentFor}ms)`);
+        const now = Date.now();
+        const sinceMsg = now - this.lastMessageAt;
+        const sincePing = this.lastHeartbeatSentAt ? (now - this.lastHeartbeatSentAt) : -1;
+        console.warn(`[HBWS] Heartbeat timeout: no pong (sincePing=${sincePing}ms, silent=${sinceMsg}ms). Forcing reconnect.`);
         try { this.ws?.terminate(); } catch {}
       }, this.heartbeatTimeoutMs);
     }, this.heartbeatIntervalMs);
