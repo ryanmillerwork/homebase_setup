@@ -218,6 +218,7 @@ class HomebaseWS {
   private lastMessageAt = 0;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
   private lastHeartbeatSentAt = 0;
+  private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(hostIp: string, port = 2565, path = '/ws') {
     this.hostIp = hostIp;
@@ -225,8 +226,7 @@ class HomebaseWS {
     this.path = path;
   }
 
-  // Global minute sweep: touch all subscriptions for all active connections
-}
+  
 
   connect(): void {
     if (this.connecting) {
@@ -490,12 +490,21 @@ class HomebaseWS {
         try { this.ws.terminate(); } catch {}
       }
     }, this.heartbeatIntervalMs);
+
+    // periodic touch sweep once per minute to refresh possibly stale datapoints
+    this.refreshTimer = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      HOMEBASE_SUBSCRIPTIONS.forEach((m) => {
+        try { this.touch(m); } catch {}
+      });
+    }, 60000);
   }
 
   private stopHeartbeat(): void {
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
     if (this.heartbeatTimeoutHandle) { clearTimeout(this.heartbeatTimeoutHandle); this.heartbeatTimeoutHandle = null; }
     if (this.staleCheckTimer) { clearInterval(this.staleCheckTimer); this.staleCheckTimer = null; }
+    if (this.refreshTimer) { clearInterval(this.refreshTimer); this.refreshTimer = null; }
   }
 
   private simulateConnectivityUpsert(connected: 0 | 1): void {
