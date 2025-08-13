@@ -14,6 +14,18 @@ import express, { Request, Response } from 'express';
 
 // for webserver
 declare const process: any;
+
+// Subscriptions to maintain with the homebase WS (edit here)
+const HOMEBASE_SUBSCRIPTIONS = [
+  'ess/system',
+  'ess/protocol',
+  'ess/variant',
+  'ess/subject',
+  'ess/status',
+  'ess/in_obs'
+];
+const DEFAULT_SUBSCRIBE_EVERY = 1;
+
 const app = express();
 const webpage_path = '/var/www/hb-webclient/spa'; // will serve index.html from this dir
 
@@ -141,8 +153,11 @@ class HomebaseWS {
       this.firstDisconnectAtMs = null;
       this.slowPhaseStartFailures = null;
       this.consecutiveFailures = 0;
-      // Subscribe to ESS topics so we receive status changes
-      this.subscribe('ess/*', 1);
+      // Subscribe only to the datapoints we care about (from top-level list)
+      HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.subscribe(m, DEFAULT_SUBSCRIBE_EVERY));
+
+      // Initial sync: touch the same set to seed values immediately
+      HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.touch(m));
       // Test command: dservGet ess/status
       this.eval('dservGet ess/status', 5000)
         .then((result) => {
@@ -380,6 +395,14 @@ class HomebaseWS {
       this.send({ cmd: 'unsubscribe', match });
     } catch (e) {
       console.error('[HBWS] unsubscribe failed:', e);
+    }
+  }
+
+  touch(name: string): void {
+    try {
+      this.send({ cmd: 'touch', name });
+    } catch (e) {
+      console.error('[HBWS] touch failed:', e);
     }
   }
 
