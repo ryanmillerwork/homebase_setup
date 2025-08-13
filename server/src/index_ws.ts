@@ -494,7 +494,14 @@ class HomebaseWS {
   }
 
   private simulateConnectivityUpsert(connected: 0 | 1): void {
-    this.logWouldBeUpsert(this.hostIp, 'ess', 'connected', connected);
+    const host = this.hostIp;
+    const status_source = 'ess';
+    const status_type = 'connected';
+    const changed = this.updateLocalStatusAndBroadcast(host, status_source, status_type, connected);
+    if (changed) {
+      console.log(`[HBWS][STATUS] ${host} ${status_source}/${status_type}=${connected}`);
+      this.logSimulatedUpsert(host, status_source, status_type, connected);
+    }
   }
 
   // Update in-memory statusData and broadcast only if value changed
