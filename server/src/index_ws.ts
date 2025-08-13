@@ -228,14 +228,6 @@ class HomebaseWS {
   // Global minute sweep: touch all subscriptions for all active connections
 }
 
-setInterval(() => {
-  homebaseConnections.forEach((hb) => {
-    try {
-      HOMEBASE_SUBSCRIPTIONS.forEach((m) => hb.touch(m));
-    } catch {}
-  });
-}, 60000);
-
   connect(): void {
     if (this.connecting) {
       return;
