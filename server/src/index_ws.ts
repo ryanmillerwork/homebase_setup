@@ -8,7 +8,7 @@ import { Pool, Client, QueryResult } from 'pg';     // MIT License
 import { WebSocketServer, WebSocket } from 'ws';    // MIT License
 import type { RawData } from 'ws';
 import ping from 'ping';                            // MIT License
-import { Socket } from 'net';                       // MIT License
+// import { Socket } from 'net';                       // Deprecated legacy TCP path (removed)
 import path from 'path';
 import express, { Request, Response } from 'express';
 
@@ -26,6 +26,7 @@ const HOMEBASE_SUBSCRIPTIONS = [
   'ess/obs_active'
 ];
 const DEFAULT_SUBSCRIBE_EVERY = 1;
+// Legacy TCP refresh is deprecated and disabled in index_ws.ts
 
 const app = express();
 const webpage_path = '/var/www/hb-webclient/spa'; // will serve index.html from this dir
@@ -425,8 +426,10 @@ async function startWebSocketServer() {
     ws.on('message', (message: string) => {
       let msg = JSON.parse(message);
       console.log('Received message from client:', msg);
-      msg?.msg_type === 'esscmd' && sendToDS(msg.ip, 2570, msg.msg); // Forward message to DS on relevant homebase
-      msg?.msg_type === 'gitcmd' && sendToDS(msg.ip, 2573, msg.msg); // Forward message to DS on relevant homebase
+      // Legacy TCP command forwarding removed; route via WS in a later step
+      if (msg?.msg_type === 'esscmd' || msg?.msg_type === 'gitcmd') {
+        console.log('[HBWS] Ignoring legacy command route; WS control to be added later', msg);
+      }
       msg?.msg_type === 'AddDevice' && addDevice(msg.ip, msg.msg); // Forward message to DS on relevant homebase
       msg?.msg_type === 'Addsubject' && addAnimal(msg.msg); // Add animal to database
       msg?.msg_type === 'sql_query' && sqlQuery(msg.msg, ws); // Get resp from db
@@ -703,77 +706,7 @@ async function upsertAnimals(devices: string[], uniqueAnimalOptions: string[]) {
   }
 }
 
-// Send a message to the dataserver on one of the homebases
-function sendToDS(ipAddress: string, dsPort: number, message: string) {
-  const dsSocket = new Socket();
-  const TIMEOUT_MS = 5000; // 5 second timeout
-
-  // Set up timeout to close connection if no response received
-  const timeoutId = setTimeout(() => {
-    console.log(`Timeout reached for DS connection to ${ipAddress}:${dsPort}, closing connection`);
-    if (dsSocket.destroyed === false) {
-      dsSocket.end();
-    }
-  }, TIMEOUT_MS);
-
-  dsSocket.connect(dsPort, ipAddress, () => {
-    console.log('sending: ', message)
-    dsSocket.write(message);
-
-    if (message.includes("ess::set_variant_args") || message.includes("ess::set_params")) {
-      console.log('also sending reset cmd...');
-      dsSocket.write('::ess::reload_variant');
-    }
-  });
-
-dsSocket.on('data', (data: any) => {
-    // Clear the timeout since we received a response
-    clearTimeout(timeoutId);
-    
-    const response = data.toString();
-    console.log('Received from ds:', response);
-
-    if (response.includes('TCL_ERROR')) {
-      console.log('got an error, sending to client...')
-      broadcastToWebSocketClients('TCL_ERROR', data.toString())
-
-    } else if (message.includes('get_system_status')) {
-      console.log("Message contains 'get_system_status'", ipAddress, message);
-
-      // example message: {"system":"","protocol":"circles","variant":"single","state":"stopped","in_obs":"0"}
-      // parsedObject = JSON.parse(message)
-
-      try {
-        updateStatus(ipAddress, JSON.parse(data.toString()));
-      } catch (error) {
-        console.error('Failed to update status:', error);
-      }
-
-  
-    } else if (message.includes('get_subject')) {
-      console.log("Message contains 'get_subject'", ipAddress, message);
-      try {
-        updateSubject(ipAddress, data.toString());
-      } catch (error) {
-        console.error('Failed to update subject:', error);
-      }
-
-    }
-    dsSocket.end();
-  });
-
-  dsSocket.on('close', () => {
-    // Clear timeout when connection closes normally
-    clearTimeout(timeoutId);
-    console.log('DS connection closed');
-  });
-
-dsSocket.on('error', (err: unknown) => {
-    // Clear timeout when connection errors
-    clearTimeout(timeoutId);
-    console.error('Error with DS:', err);
-  });
-}
+// Legacy TCP DS client removed in favor of WebSocket-based control
 
 // after requesting ess::get_system_status from a HB, update the database 
 async function updateStatus(ipAddress: string, parsedObject: { [key: string]: string }) {
@@ -1209,10 +1142,7 @@ async function pingDevices() {
         pingResults[device].push({ success: alive, time: alive && typeof time === 'number' ? time : undefined });
 
         // Check if the device has transitioned from no connection to connection
-        if (currentStatus && lastConnectionStatus[device] === false) {
-          sendToDS(address, 2570, '::ess::get_system_status');
-          sendToDS(address, 2570, '::ess::get_subject');
-        }
+        // No legacy TCP refresh here; WS subscriptions handle state
 
         // Update the last known status
         lastConnectionStatus[device] = currentStatus;
