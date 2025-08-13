@@ -398,43 +398,49 @@ class HomebaseWS {
     const lowerName = name.toLowerCase();
     const host = this.hostIp;
 
-    // Map ess/status -> running 1/0
-    if (lowerName === 'ess/status') {
-      const running = value.toLowerCase() === 'running' ? 1 : 0;
-      this.logWouldBeUpsert(host, 'ess', 'running', running);
-      return;
+    // Compute source/type per rules
+    let status_source = '';
+    let status_type = '';
+    let status_value: string | number = value;
+
+    if (lowerName === '@keys') {
+      status_source = 'system';
+      status_type = '@keys';
+    } else if (lowerName.startsWith('ess/git/')) {
+      status_source = 'git';
+      status_type = name.slice('ess/git/'.length);
+    } else if (lowerName === 'ess/obs_active') {
+      status_source = 'ess';
+      status_type = 'in_obs';
+      status_value = Number(value) || 0;
+    } else if (lowerName === 'ess/in_obs') {
+      status_source = 'ess';
+      status_type = 'in_obs';
+      status_value = Number(value) || 0;
+    } else {
+      const slash = name.indexOf('/');
+      if (slash > 0) {
+        status_source = name.slice(0, slash);
+        status_type = name.slice(slash + 1);
+      } else {
+        // Fallback: treat as system-scoped single token
+        status_source = 'system';
+        status_type = name;
+      }
     }
 
-    // Map obs_active -> in_obs 0/1 (as number) since ess/in_obs may not exist on WS
-    if (lowerName === 'ess/obs_active') {
-      const inObs = Number(value) || 0;
-      this.logWouldBeUpsert(host, 'ess', 'in_obs', inObs);
-      return;
-    }
+    // Update cache; only proceed if changed
+    const changed = this.updateLocalStatusAndBroadcast(host, status_source, status_type, status_value);
+    if (!changed) return;
 
-    // Map ess/subject -> animal
-    if (lowerName === 'ess/subject') {
-      this.logWouldBeUpsert(host, 'ess', 'animal', value);
-      return;
-    }
+    // Print concise status log
+    console.log(`[HBWS][STATUS] ${host} ${status_source}/${status_type}=${status_value}`);
 
-    // Track system/protocol/variant to compose combined variant string
-    if (lowerName === 'ess/system') {
-      this.logWouldBeUpsert(host, 'ess', 'system', value);
-      return;
-    }
-    if (lowerName === 'ess/protocol') {
-      this.logWouldBeUpsert(host, 'ess', 'protocol', value);
-      return;
-    }
-    if (lowerName === 'ess/variant') {
-      this.logWouldBeUpsert(host, 'ess', 'variant', value);
-      return;
-    }
+    // Simulated DB upsert log
+    this.logSimulatedUpsert(host, status_source, status_type, status_value);
   }
 
-  private logWouldBeUpsert(host: string, status_source: string, status_type: string, status_value: string | number): void {
-    // Structured, single-line for easier grep
+  private logSimulatedUpsert(host: string, status_source: string, status_type: string, status_value: string | number): void {
     const payload = {
       table: 'server_status',
       action: 'upsert',
@@ -443,8 +449,6 @@ class HomebaseWS {
       note: 'simulated - not executed by index_ws.ts'
     };
     console.log('[HBWS][SIMULATED-UPSERT]', JSON.stringify(payload));
-    // Update local cache and broadcast if changed
-    this.updateLocalStatusAndBroadcast(host, status_source, status_type, status_value);
   }
 
   private startHeartbeat(): void {
@@ -499,7 +503,7 @@ class HomebaseWS {
     status_source: string,
     status_type: string,
     status_value: string | number
-  ): void {
+  ): boolean {
     try {
       const newVal = typeof status_value === 'number' ? String(status_value) : status_value;
       const idx = statusData.findIndex(
@@ -531,8 +535,10 @@ class HomebaseWS {
           sys_time: nowIso
         };
         broadcastToWebSocketClients('status_changes', payload);
+        return true;
       }
     } catch {}
+    return false;
   }
 
   private scheduleReconnect(): void {
