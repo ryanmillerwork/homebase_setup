@@ -1142,4 +1142,4 @@ startWebSocketServer();
 // Initialize Homebase WebSocket client for 192.168.4.201 (Step 1)
 const hbWS = new HomebaseWS('192.168.4.201');
 hbWS.connect();
-startWebServer(webpage_path);
+// startWebServer(webpage_path); // Temporarily disabled to avoid port conflict during WS client testing
