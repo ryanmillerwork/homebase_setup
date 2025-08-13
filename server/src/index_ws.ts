@@ -114,6 +114,15 @@ class HomebaseWS {
   private readonly requestMap: Map<string, PendingRequest> = new Map();
   private readonly isChunkedMessageKey = 'isChunkedMessage';
   private readonly chunkBuffers: Map<string, { chunks: string[]; total: number }> = new Map();
+  private firstDisconnectAtMs: number | null = null;
+  private slowPhaseStartFailures: number | null = null;
+  private consecutiveFailures = 0;
+  private readonly fastRetryWindowMs = 5 * 60 * 1000; // 5 minutes
+  private readonly fastRetryBaseMs = 2000;            // 2s
+  private readonly fastRetryJitterMs = 1000;          // up to +1s
+  private readonly slowBaseBackoffMs = 15000;         // 15s
+  private readonly slowMaxBackoffMs = 120000;         // 2m
+  private readonly slowJitterMs = 2000;               // up to +2s
 
   constructor(hostIp: string, port = 2565, path = '/ws') {
     this.hostIp = hostIp;
@@ -129,6 +138,9 @@ class HomebaseWS {
     this.ws.on('open', () => {
       console.log('[HBWS] Connected');
       this.reconnectAttempts = 0;
+      this.firstDisconnectAtMs = null;
+      this.slowPhaseStartFailures = null;
+      this.consecutiveFailures = 0;
       // Subscribe to ESS topics so we receive status changes
       this.subscribe('ess/*', 1);
       // Test command: dservGet ess/status
@@ -204,8 +216,8 @@ class HomebaseWS {
     }
 
     if (msg && msg.type === 'datapoint') {
-      // Step 1: just log datapoints
-      console.log('[HBWS] Datapoint:', msg.name, msg.data);
+      // Step 2: log datapoints and emit simulated DB upserts for tracked fields
+      this.processDatapointForLogging(String(msg.name || ''), String(msg.data ?? ''));
       return;
     }
 
@@ -219,12 +231,100 @@ class HomebaseWS {
     console.log('[HBWS] Message:', msg);
   }
 
+  // Maintain minimal ESS state to compose variant string
+  private essState: { system?: string; protocol?: string; variant?: string } = {};
+
+  private processDatapointForLogging(name: string, value: string): void {
+    console.log('[HBWS] Datapoint:', name, value);
+
+    const lowerName = name.toLowerCase();
+    const host = this.hostIp;
+
+    // Map ess/status -> running 1/0
+    if (lowerName === 'ess/status') {
+      const running = value.toLowerCase() === 'running' ? 1 : 0;
+      this.logWouldBeUpsert(host, 'ess', 'running', running);
+      return;
+    }
+
+    // Map ess/in_obs -> in_obs 0/1 (as number)
+    if (lowerName === 'ess/in_obs') {
+      const inObs = Number(value) || 0;
+      this.logWouldBeUpsert(host, 'ess', 'in_obs', inObs);
+      return;
+    }
+
+    // Map ess/subject -> animal
+    if (lowerName === 'ess/subject') {
+      this.logWouldBeUpsert(host, 'ess', 'animal', value);
+      return;
+    }
+
+    // Track system/protocol/variant to compose combined variant string
+    if (lowerName === 'ess/system') {
+      this.essState.system = value;
+      this.emitVariantUpsertIfReady(host);
+      return;
+    }
+    if (lowerName === 'ess/protocol') {
+      this.essState.protocol = value;
+      this.emitVariantUpsertIfReady(host);
+      return;
+    }
+    if (lowerName === 'ess/variant') {
+      this.essState.variant = value;
+      this.emitVariantUpsertIfReady(host);
+      return;
+    }
+  }
+
+  private emitVariantUpsertIfReady(host: string): void {
+    const system = this.essState.system || '';
+    const protocol = this.essState.protocol || '';
+    const variant = this.essState.variant || '';
+    const statusVal = system === '' ? ' : : ' : `${system}:${protocol}:${variant}`;
+    this.logWouldBeUpsert(host, 'ess', 'variant', statusVal);
+  }
+
+  private logWouldBeUpsert(host: string, status_source: string, status_type: string, status_value: string | number): void {
+    // Structured, single-line for easier grep
+    const payload = {
+      table: 'server_status',
+      action: 'upsert',
+      values: { host, status_source, status_type, status_value },
+      server_time: 'NOW()',
+      note: 'simulated - not executed by index_ws.ts'
+    };
+    console.log('[HBWS][SIMULATED-UPSERT]', JSON.stringify(payload));
+  }
+
   private scheduleReconnect(): void {
     this.reconnectAttempts += 1;
-    const exp = Math.min(this.maxBackoffMs, this.baseBackoffMs * Math.pow(2, this.reconnectAttempts));
-    const jitter = Math.floor(Math.random() * 300);
-    const delay = exp + jitter;
-    console.log(`[HBWS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    this.consecutiveFailures += 1;
+    const now = Date.now();
+    if (this.firstDisconnectAtMs === null) {
+      this.firstDisconnectAtMs = now;
+    }
+    const elapsed = now - this.firstDisconnectAtMs;
+
+    let delay: number;
+    if (elapsed < this.fastRetryWindowMs) {
+      // Fast retry phase: frequent attempts (2-3s)
+      const jitter = Math.floor(Math.random() * this.fastRetryJitterMs);
+      delay = this.fastRetryBaseMs + jitter;
+      console.log(`[HBWS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}, fast-retry phase)`);
+    } else {
+      // Slow backoff phase: exponential from 15s up to 2m
+      if (this.slowPhaseStartFailures === null) {
+        this.slowPhaseStartFailures = this.consecutiveFailures;
+      }
+      const slowFailures = Math.max(0, this.consecutiveFailures - this.slowPhaseStartFailures);
+      const backoff = Math.min(this.slowMaxBackoffMs, this.slowBaseBackoffMs * Math.pow(2, slowFailures));
+      const jitter = Math.floor(Math.random() * this.slowJitterMs);
+      delay = backoff + jitter;
+      console.log(`[HBWS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}, slow-backoff phase)`);
+    }
+
     setTimeout(() => this.connect(), delay);
   }
 
