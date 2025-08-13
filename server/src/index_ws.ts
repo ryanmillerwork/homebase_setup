@@ -1003,6 +1003,7 @@ function handleRecentStatsChanges(payload: RecentStatsChanges) {
 // Function to broadcast messages to all WebSocket clients
 function broadcastToWebSocketClients(eventType: string, data: any) {
   try {
+    if (!wss) return;
     wss.clients.forEach((ws: WebSocket) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: eventType, data }));
@@ -1138,7 +1139,7 @@ const startWebServer = (staticPath: string): void => {
 
 
 pingDevices(); setInterval(pingDevices, 10000);
-startWebSocketServer();
+// startWebSocketServer(); // Temporarily disabled to avoid port conflict on 8080
 // Initialize Homebase WebSocket client for 192.168.4.201 (Step 1)
 const hbWS = new HomebaseWS('192.168.4.201');
 hbWS.connect();
