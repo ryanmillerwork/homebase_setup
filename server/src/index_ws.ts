@@ -218,6 +218,7 @@ class HomebaseWS {
   private lastMessageAt = 0;
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
   private lastHeartbeatSentAt = 0;
+  private lastValues: Map<string, string> = new Map();
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(hostIp: string, port = 2565, path = '/ws') {
@@ -513,6 +514,11 @@ class HomebaseWS {
   ): boolean {
     try {
       const newVal = typeof status_value === 'number' ? String(status_value) : status_value;
+      const key = `${host}|${status_source}|${status_type}`;
+      if (this.lastValues.get(key) === newVal) {
+        return false;
+      }
+      this.lastValues.set(key, newVal);
       const idx = statusData.findIndex(
         (e) => e.host === host && e.status_type === status_type && e.status_source === status_source
       );
