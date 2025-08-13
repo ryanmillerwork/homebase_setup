@@ -6,6 +6,7 @@
 
 import { Pool, Client, QueryResult } from 'pg';     // MIT License
 import { WebSocketServer, WebSocket } from 'ws';    // MIT License
+import type { RawData } from 'ws';
 import ping from 'ping';                            // MIT License
 import { Socket } from 'net';                       // MIT License
 import path from 'path';
@@ -138,7 +139,7 @@ class HomebaseWS {
         });
     });
 
-    this.ws.on('message', (data: WebSocket.RawData) => {
+    this.ws.on('message', (data: RawData) => {
       const text = typeof data === 'string' ? data : data.toString('utf-8');
       try {
         const msg = JSON.parse(text as string);
