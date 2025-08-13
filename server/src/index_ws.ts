@@ -122,6 +122,7 @@ class HomebaseWS {
   private port: number;
   private path: string;
   private ws: WebSocket | null = null;
+  private connecting = false;
   private reconnectAttempts = 0;
   private readonly maxBackoffMs = 30000;
   private readonly baseBackoffMs = 1000;
@@ -137,6 +138,9 @@ class HomebaseWS {
   private readonly slowBaseBackoffMs = 15000;         // 15s
   private readonly slowMaxBackoffMs = 120000;         // 2m
   private readonly slowJitterMs = 2000;               // up to +2s
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly connectTimeoutMs = 8000;
+  private connectTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
   constructor(hostIp: string, port = 2565, path = '/ws') {
     this.hostIp = hostIp;
@@ -145,12 +149,29 @@ class HomebaseWS {
   }
 
   connect(): void {
+    if (this.connecting) {
+      return;
+    }
+    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     const url = `ws://${this.hostIp}:${this.port}${this.path}`;
     console.log(`[HBWS] Connecting to ${url}`);
+    this.connecting = true;
     this.ws = new WebSocket(url);
+
+    // Connection attempt timeout to avoid hanging CONNECTING state
+    if (this.connectTimeoutHandle) clearTimeout(this.connectTimeoutHandle);
+    this.connectTimeoutHandle = setTimeout(() => {
+      if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+        try { this.ws.terminate(); } catch {}
+      }
+    }, this.connectTimeoutMs);
 
     this.ws.on('open', () => {
       console.log('[HBWS] Connected');
+      this.connecting = false;
+      if (this.connectTimeoutHandle) { clearTimeout(this.connectTimeoutHandle); this.connectTimeoutHandle = null; }
       this.reconnectAttempts = 0;
       this.firstDisconnectAtMs = null;
       this.slowPhaseStartFailures = null;
@@ -158,7 +179,7 @@ class HomebaseWS {
       // Subscribe only to the datapoints we care about (from top-level list)
       HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.subscribe(m, DEFAULT_SUBSCRIBE_EVERY));
 
-      // Initial sync: touch the same set to seed values immediately
+      // Initial sync: touch all subscribed keys to seed values immediately
       HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.touch(m));
       // Test command: dservGet ess/status
       this.eval('dservGet ess/status', 5000)
@@ -207,11 +228,20 @@ class HomebaseWS {
     this.ws.on('close', (code: number, reason: unknown) => {
       const reasonText = typeof reason === 'string' ? reason : '';
       console.warn(`[HBWS] Disconnected (code=${code}, reason=${reasonText || 'n/a'})`);
+      this.connecting = false;
+      if (this.connectTimeoutHandle) { clearTimeout(this.connectTimeoutHandle); this.connectTimeoutHandle = null; }
+      this.ws = null;
       this.scheduleReconnect();
     });
 
     this.ws.on('error', (err: unknown) => {
-      console.error('[HBWS] Socket error:', err);
+      // Print concise error code only
+      const code = (err as any)?.code || (err as any)?.errno || 'ERR';
+      if (code === 'EHOSTUNREACH' || code === 'ECONNREFUSED') {
+        console.warn(`[HBWS] Socket error: ${code}`);
+      } else {
+        console.warn('[HBWS] Socket error');
+      }
       // Error will also lead to close in most cases
     });
   }
@@ -238,8 +268,11 @@ class HomebaseWS {
       return;
     }
 
-    // Log subscription acks and other control messages
+    // Log subscription acks and other control messages (suppress noisy not-found touches)
     if (msg && (msg.status || msg.action)) {
+      if (msg.status === 'error' && typeof msg.error === 'string' && msg.error.includes('Datapoint not found')) {
+        return;
+      }
       console.log('[HBWS] Control:', msg);
       return;
     }
@@ -327,8 +360,11 @@ class HomebaseWS {
       delay = backoff + jitter;
       console.log(`[HBWS] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}, slow-backoff phase)`);
     }
-
-    setTimeout(() => this.connect(), delay);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, delay);
   }
 
   private getOpenSocket(): WebSocket {
