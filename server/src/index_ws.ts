@@ -22,7 +22,8 @@ const HOMEBASE_SUBSCRIPTIONS = [
   'ess/variant',
   'ess/subject',
   'ess/status',
-  'ess/in_obs'
+  // Note: ess/in_obs is not present on WS; use ess/obs_active as proxy
+  'ess/obs_active'
 ];
 const DEFAULT_SUBSCRIBE_EVERY = 1;
 
@@ -246,9 +247,6 @@ class HomebaseWS {
     console.log('[HBWS] Message:', msg);
   }
 
-  // Maintain minimal ESS state to compose variant string
-  private essState: { system?: string; protocol?: string; variant?: string } = {};
-
   private processDatapointForLogging(name: string, value: string): void {
     console.log('[HBWS] Datapoint:', name, value);
 
@@ -262,8 +260,8 @@ class HomebaseWS {
       return;
     }
 
-    // Map ess/in_obs -> in_obs 0/1 (as number)
-    if (lowerName === 'ess/in_obs') {
+    // Map obs_active -> in_obs 0/1 (as number) since ess/in_obs may not exist on WS
+    if (lowerName === 'ess/obs_active') {
       const inObs = Number(value) || 0;
       this.logWouldBeUpsert(host, 'ess', 'in_obs', inObs);
       return;
@@ -277,28 +275,17 @@ class HomebaseWS {
 
     // Track system/protocol/variant to compose combined variant string
     if (lowerName === 'ess/system') {
-      this.essState.system = value;
-      this.emitVariantUpsertIfReady(host);
+      this.logWouldBeUpsert(host, 'ess', 'system', value);
       return;
     }
     if (lowerName === 'ess/protocol') {
-      this.essState.protocol = value;
-      this.emitVariantUpsertIfReady(host);
+      this.logWouldBeUpsert(host, 'ess', 'protocol', value);
       return;
     }
     if (lowerName === 'ess/variant') {
-      this.essState.variant = value;
-      this.emitVariantUpsertIfReady(host);
+      this.logWouldBeUpsert(host, 'ess', 'variant', value);
       return;
     }
-  }
-
-  private emitVariantUpsertIfReady(host: string): void {
-    const system = this.essState.system || '';
-    const protocol = this.essState.protocol || '';
-    const variant = this.essState.variant || '';
-    const statusVal = system === '' ? ' : : ' : `${system}:${protocol}:${variant}`;
-    this.logWouldBeUpsert(host, 'ess', 'variant', statusVal);
   }
 
   private logWouldBeUpsert(host: string, status_source: string, status_type: string, status_value: string | number): void {
