@@ -1,8 +1,8 @@
-// Web socket with homebase systems
-// Web socket with web clients
+// Websocket with homebase systems
+// Websocket with web clients
 // Postgres listener
 // Communication checker (pinging homebases)
-// webserver
+// web server
 
 import { Pool, Client, QueryResult } from 'pg';     // MIT License
 import { WebSocketServer, WebSocket } from 'ws';    // MIT License
@@ -225,6 +225,17 @@ class HomebaseWS {
     this.path = path;
   }
 
+  // Global minute sweep: touch all subscriptions for all active connections
+}
+
+setInterval(() => {
+  homebaseConnections.forEach((hb) => {
+    try {
+      HOMEBASE_SUBSCRIPTIONS.forEach((m) => hb.touch(m));
+    } catch {}
+  });
+}, 60000);
+
   connect(): void {
     if (this.connecting) {
       return;
@@ -290,10 +301,8 @@ class HomebaseWS {
 
     this.ws.on('message', (data: RawData) => {
       this.lastMessageAt = Date.now();
-      // If a heartbeat was outstanding, clear it and log
+      // If a heartbeat was outstanding, clear it
       if (this.heartbeatTimeoutHandle) {
-        const rtt = this.lastHeartbeatSentAt ? (Date.now() - this.lastHeartbeatSentAt) : -1;
-        console.log(`[HBWS] Heartbeat satisfied by inbound message (rtt=${rtt}ms)`);
         clearTimeout(this.heartbeatTimeoutHandle);
         this.heartbeatTimeoutHandle = null;
       }
@@ -363,8 +372,6 @@ class HomebaseWS {
     // Log pongs specifically and clear heartbeat timeout
     (this.ws as any).on?.('pong', () => {
       const now = Date.now();
-      const rtt = this.lastHeartbeatSentAt ? (now - this.lastHeartbeatSentAt) : -1;
-      console.log(`[HBWS] Received ws pong (rtt=${rtt}ms)`);
       this.lastMessageAt = now;
       if (this.heartbeatTimeoutHandle) {
         clearTimeout(this.heartbeatTimeoutHandle);
@@ -462,6 +469,8 @@ class HomebaseWS {
       note: 'simulated - not executed by index_ws.ts'
     };
     console.log('[HBWS][SIMULATED-UPSERT]', JSON.stringify(payload));
+    // Update local cache and broadcast if changed
+    this.updateLocalStatusAndBroadcast(host, status_source, status_type, status_value);
   }
 
   private startHeartbeat(): void {
@@ -471,15 +480,11 @@ class HomebaseWS {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
       try {
         this.lastHeartbeatSentAt = Date.now();
-        console.log(`[HBWS] Sending ws ping to ${this.hostIp}`);
         (this.ws as any).ping?.();
       } catch {}
       if (this.heartbeatTimeoutHandle) clearTimeout(this.heartbeatTimeoutHandle);
       this.heartbeatTimeoutHandle = setTimeout(() => {
         const now = Date.now();
-        const sinceMsg = now - this.lastMessageAt;
-        const sincePing = this.lastHeartbeatSentAt ? (now - this.lastHeartbeatSentAt) : -1;
-        console.warn(`[HBWS] Heartbeat timeout: no pong (sincePing=${sincePing}ms, silent=${sinceMsg}ms). Forcing reconnect.`);
         try { this.ws?.terminate(); } catch {}
       }, this.heartbeatTimeoutMs);
     }, this.heartbeatIntervalMs);
@@ -503,6 +508,48 @@ class HomebaseWS {
 
   private simulateConnectivityUpsert(connected: 0 | 1): void {
     this.logWouldBeUpsert(this.hostIp, 'ess', 'connected', connected);
+  }
+
+  // Update in-memory statusData and broadcast only if value changed
+  private updateLocalStatusAndBroadcast(
+    host: string,
+    status_source: string,
+    status_type: string,
+    status_value: string | number
+  ): void {
+    try {
+      const newVal = typeof status_value === 'number' ? String(status_value) : status_value;
+      const idx = statusData.findIndex(
+        (e) => e.host === host && e.status_type === status_type && e.status_source === status_source
+      );
+      const nowIso = new Date().toISOString();
+      let changed = false;
+      if (idx >= 0) {
+        if (statusData[idx].status_value !== newVal) {
+          statusData[idx] = {
+            host,
+            status_source,
+            status_type,
+            status_value: newVal,
+            sys_time: nowIso
+          };
+          changed = true;
+        }
+      } else {
+        statusData.push({ host, status_source, status_type, status_value: newVal, sys_time: nowIso });
+        changed = true;
+      }
+      if (changed) {
+        const payload: StatusChanges = {
+          host,
+          status_source,
+          status_type,
+          status_value: newVal,
+          sys_time: nowIso
+        };
+        broadcastToWebSocketClients('status_changes', payload);
+      }
+    } catch {}
   }
 
   private scheduleReconnect(): void {
