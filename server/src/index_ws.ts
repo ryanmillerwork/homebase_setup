@@ -17,14 +17,69 @@ declare const process: any;
 
 // Subscriptions to maintain with the homebase WS (edit here)
 const HOMEBASE_SUBSCRIPTIONS = [
-  'ess/system',
+  // System-level
+  'system/hostname',
+  'system/hostaddr',
+  'system/os',
+
+  // ESS core identity and state
+  'ess/subject',
+  'ess/project',
+  'ess/system',  
   'ess/protocol',
   'ess/variant',
-  'ess/subject',
+  'ess/systems',
+  'ess/protocols',
+  'ess/variants',
+  'ess/state',
   'ess/status',
-  // Note: ess/in_obs is not present on WS; use ess/obs_active as proxy
-  'ess/obs_active'
+  'ess/running',
+  'ess/remote',
+  'ess/name',
+  'ess/ipaddr',
+  'ess/rmt_host',
+  'ess/rmt_connected',
+
+  // Observation / session  
+  'ess/obs_active',
+  'ess/in_obs',
+  'ess/obs_id',
+  'ess/obs_total',
+  'ess/obs_count',
+
+  // Files and dirs
+  'ess/data_dir',
+  'ess/datafile',
+  'ess/lastfile',
+  'ess/system_path',
+  'ess/executable',
+
+  // Git
+  'ess/git/status',
+  'ess/git/branches',
+  'ess/git/branch',
+  'ess/git/tag',
+
+  // Loading / progress
+  'ess/loading_start_time',
+  'ess/loading_progress',
+  'ess/loading_operation_id',
+
+  // Params / scripts / mappings
+  'ess/variant_info',
+  'ess/param_settings',
+  'ess/params',
+  'ess/event_mappings',
+
+  // Misc runtime
+  'ess/time',
+  'ess/block_id',
+  'ess/warningInfo',
+
+  // Discovery helpers
+  '@keys'
 ];
+
 const DEFAULT_SUBSCRIBE_EVERY = 1;
 const HOMEBASE_ALLOWED_IPS = ['192.168.4.201'];
 // Legacy TCP refresh is deprecated and disabled in index_ws.ts
@@ -155,6 +210,14 @@ class HomebaseWS {
   private evalQueue: Array<{ script: string; timeoutMs: number; resolve: (v: unknown)=>void; reject: (e?: unknown)=>void; enqueuedAt: number }>
     = [];
 
+  // Heartbeat & staleness detection
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private heartbeatTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  private readonly heartbeatIntervalMs = 10000; // send ping every 10s
+  private readonly heartbeatTimeoutMs = 5000;   // expect pong within 5s
+  private readonly staleMs = 30000;             // force reconnect if no messages for 30s
+  private lastMessageAt = 0;
+
   constructor(hostIp: string, port = 2565, path = '/ws') {
     this.hostIp = hostIp;
     this.port = port;
@@ -193,10 +256,13 @@ class HomebaseWS {
       if (this.connectTimeoutHandle) { clearTimeout(this.connectTimeoutHandle); this.connectTimeoutHandle = null; }
       this.openedThisAttempt = true;
       this.connectTimedOut = false;
+      this.lastMessageAt = Date.now();
       this.reconnectAttempts = 0;
       this.firstDisconnectAtMs = null;
       this.slowPhaseStartFailures = null;
       this.consecutiveFailures = 0;
+      this.startHeartbeat();
+      this.simulateConnectivityUpsert(1);
       // Subscribe only to the datapoints we care about (from top-level list)
       HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.subscribe(m, DEFAULT_SUBSCRIBE_EVERY));
 
@@ -222,6 +288,7 @@ class HomebaseWS {
     });
 
     this.ws.on('message', (data: RawData) => {
+      this.lastMessageAt = Date.now();
       const text = typeof data === 'string' ? data : data.toString('utf-8');
       try {
         const msg = JSON.parse(text as string);
@@ -270,6 +337,8 @@ class HomebaseWS {
       } else {
         console.warn(`[HBWS] Connect failed to ${this.lastUrl}`);
       }
+      this.stopHeartbeat();
+      this.simulateConnectivityUpsert(0);
       this.connecting = false;
       if (this.connectTimeoutHandle) { clearTimeout(this.connectTimeoutHandle); this.connectTimeoutHandle = null; }
       this.ws = null;
@@ -285,6 +354,7 @@ class HomebaseWS {
   }
 
   private handleMessage(msg: any): void {
+    // Heartbeat replies may be plain pongs from ws lib, but if we get JSON we just proceed
     if (msg && msg.requestId && this.requestMap.has(msg.requestId)) {
       const pending = this.requestMap.get(msg.requestId)!;
       this.requestMap.delete(msg.requestId);
@@ -372,6 +442,47 @@ class HomebaseWS {
       note: 'simulated - not executed by index_ws.ts'
     };
     console.log('[HBWS][SIMULATED-UPSERT]', JSON.stringify(payload));
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    // periodic ping
+    this.heartbeatTimer = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      try {
+        (this.ws as any).ping?.();
+      } catch {}
+      if (this.heartbeatTimeoutHandle) clearTimeout(this.heartbeatTimeoutHandle);
+      this.heartbeatTimeoutHandle = setTimeout(() => {
+        const silentFor = Date.now() - this.lastMessageAt;
+        console.warn(`[HBWS] Heartbeat missed, forcing reconnect (silent ${silentFor}ms)`);
+        try { this.ws?.terminate(); } catch {}
+      }, this.heartbeatTimeoutMs);
+    }, this.heartbeatIntervalMs);
+
+    // stale guard watchdog
+    setTimeout(() => {
+      const check = () => {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        const silentFor = Date.now() - this.lastMessageAt;
+        if (silentFor > this.staleMs) {
+          console.warn(`[HBWS] Stale connection detected (${silentFor}ms), forcing reconnect`);
+          try { this.ws.terminate(); } catch {}
+          return;
+        }
+        setTimeout(check, this.heartbeatIntervalMs);
+      };
+      check();
+    }, this.heartbeatIntervalMs);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
+    if (this.heartbeatTimeoutHandle) { clearTimeout(this.heartbeatTimeoutHandle); this.heartbeatTimeoutHandle = null; }
+  }
+
+  private simulateConnectivityUpsert(connected: 0 | 1): void {
+    this.logWouldBeUpsert(this.hostIp, 'ess', 'connected', connected);
   }
 
   private scheduleReconnect(): void {
