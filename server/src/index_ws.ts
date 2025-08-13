@@ -144,6 +144,7 @@ class HomebaseWS {
   private openedThisAttempt = false;
   private connectTimedOut = false;
   private lastErrorCode: string | null = null;
+  private lastUrl: string = '';
 
   constructor(hostIp: string, port = 2565, path = '/ws') {
     this.hostIp = hostIp;
@@ -159,6 +160,7 @@ class HomebaseWS {
       return;
     }
     const url = `ws://${this.hostIp}:${this.port}${this.path}`;
+    this.lastUrl = url;
     console.log(`[HBWS] Connecting to ${url}`);
     this.connecting = true;
     this.ws = new WebSocket(url);
@@ -240,11 +242,11 @@ class HomebaseWS {
       if (this.openedThisAttempt) {
         console.warn(`[HBWS] Disconnected (code=${code}, reason=${reasonText || 'n/a'})`);
       } else if (this.connectTimedOut) {
-        console.warn('[HBWS] Connect failed (timeout)');
+        console.warn(`[HBWS] Connect failed to ${this.lastUrl} (timeout)`);
       } else if (this.lastErrorCode) {
-        console.warn(`[HBWS] Connect failed (${this.lastErrorCode})`);
+        console.warn(`[HBWS] Connect failed to ${this.lastUrl} (${this.lastErrorCode})`);
       } else {
-        console.warn('[HBWS] Connect failed');
+        console.warn(`[HBWS] Connect failed to ${this.lastUrl}`);
       }
       this.connecting = false;
       if (this.connectTimeoutHandle) { clearTimeout(this.connectTimeoutHandle); this.connectTimeoutHandle = null; }
@@ -253,14 +255,9 @@ class HomebaseWS {
     });
 
     this.ws.on('error', (err: unknown) => {
-      // Capture error code for close handler context
+      // Capture error code for close handler context (suppress direct logging to avoid redundancy)
       const code = (err as any)?.code || (err as any)?.errno || null;
       this.lastErrorCode = code;
-      if (code) {
-        console.warn(`[HBWS] Socket error: ${code}`);
-      } else {
-        console.warn('[HBWS] Socket error');
-      }
       // Error will also lead to close in most cases
     });
   }
