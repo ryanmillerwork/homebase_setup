@@ -217,6 +217,7 @@ class HomebaseWS {
   private readonly heartbeatTimeoutMs = 5000;   // expect pong within 5s
   private readonly staleMs = 30000;             // force reconnect if no messages for 30s
   private lastMessageAt = 0;
+  private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(hostIp: string, port = 2565, path = '/ws') {
     this.hostIp = hostIp;
@@ -461,24 +462,20 @@ class HomebaseWS {
     }, this.heartbeatIntervalMs);
 
     // stale guard watchdog
-    setTimeout(() => {
-      const check = () => {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-        const silentFor = Date.now() - this.lastMessageAt;
-        if (silentFor > this.staleMs) {
-          console.warn(`[HBWS] Stale connection detected (${silentFor}ms), forcing reconnect`);
-          try { this.ws.terminate(); } catch {}
-          return;
-        }
-        setTimeout(check, this.heartbeatIntervalMs);
-      };
-      check();
+    this.staleCheckTimer = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      const silentFor = Date.now() - this.lastMessageAt;
+      if (silentFor > this.staleMs) {
+        console.warn(`[HBWS] Stale connection detected (${silentFor}ms), forcing reconnect`);
+        try { this.ws.terminate(); } catch {}
+      }
     }, this.heartbeatIntervalMs);
   }
 
   private stopHeartbeat(): void {
     if (this.heartbeatTimer) { clearInterval(this.heartbeatTimer); this.heartbeatTimer = null; }
     if (this.heartbeatTimeoutHandle) { clearTimeout(this.heartbeatTimeoutHandle); this.heartbeatTimeoutHandle = null; }
+    if (this.staleCheckTimer) { clearInterval(this.staleCheckTimer); this.staleCheckTimer = null; }
   }
 
   private simulateConnectivityUpsert(connected: 0 | 1): void {
