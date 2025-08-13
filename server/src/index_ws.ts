@@ -26,6 +26,7 @@ const HOMEBASE_SUBSCRIPTIONS = [
   'ess/obs_active'
 ];
 const DEFAULT_SUBSCRIBE_EVERY = 1;
+const HOMEBASE_ALLOWED_IPS = ['192.168.4.201'];
 // Legacy TCP refresh is deprecated and disabled in index_ws.ts
 
 const app = express();
@@ -200,6 +201,15 @@ class HomebaseWS {
         })
         .catch((err) => {
           console.error('[HBWS] Test eval failed:', err);
+        });
+
+      // Test git status via WS (non-destructive)
+      this.eval('send git {git::status}', 15000)
+        .then((result) => {
+          console.log('[HBWS] Test git status result:', result);
+        })
+        .catch((err) => {
+          console.error('[HBWS] Test git status failed:', err);
         });
     });
 
@@ -460,6 +470,24 @@ class HomebaseWS {
   }
 }
 
+// -----------------------------
+// Homebase Connection Registry
+// -----------------------------
+const homebaseConnections: Map<string, HomebaseWS> = new Map();
+
+function getHomebaseWS(ip: string): HomebaseWS | null {
+  if (!HOMEBASE_ALLOWED_IPS.includes(ip)) {
+    console.warn('[HBWS] Requested IP not allowed:', ip);
+    return null;
+  }
+  if (!homebaseConnections.has(ip)) {
+    const hb = new HomebaseWS(ip);
+    homebaseConnections.set(ip, hb);
+    hb.connect();
+  }
+  return homebaseConnections.get(ip)!;
+}
+
 async function startWebSocketServer() {
   await fetchCurrentStatus();
   await fetchCurrentCommStatus();
@@ -478,10 +506,8 @@ async function startWebSocketServer() {
     ws.on('message', (message: string) => {
       let msg = JSON.parse(message);
       console.log('Received message from client:', msg);
-      // Legacy TCP command forwarding removed; route via WS in a later step
-      if (msg?.msg_type === 'esscmd' || msg?.msg_type === 'gitcmd') {
-        console.log('[HBWS] Ignoring legacy command route; WS control to be added later', msg);
-      }
+      if (msg?.msg_type === 'esscmd') handleEssGitCommand('ess', msg.ip, msg.msg, ws);
+      if (msg?.msg_type === 'gitcmd') handleEssGitCommand('git', msg.ip, msg.msg, ws);
       msg?.msg_type === 'AddDevice' && addDevice(msg.ip, msg.msg); // Forward message to DS on relevant homebase
       msg?.msg_type === 'Addsubject' && addAnimal(msg.msg); // Add animal to database
       msg?.msg_type === 'sql_query' && sqlQuery(msg.msg, ws); // Get resp from db
@@ -1114,6 +1140,30 @@ function broadcastToWebSocketClients(eventType: string, data: any) {
     });
   } catch (broadcastError) {
     console.error(`Error broadcasting ${eventType} to WebSocket clients:`, broadcastError);
+  }
+}
+
+// Handle ESS/Git commands from web clients via WS to homebase
+function handleEssGitCommand(kind: 'ess' | 'git', ip: string, payload: string, clientWs: WebSocket) {
+  try {
+    const hb = getHomebaseWS(ip);
+    if (!hb) {
+      clientWs.send(JSON.stringify({ type: 'error', message: `HBWS not allowed or unavailable for ${ip}` }));
+      return;
+    }
+    const script = kind === 'ess' ? payload : `send git {${payload}}`;
+    hb.eval(script, 15000)
+      .then((result) => {
+        clientWs.send(JSON.stringify({ type: 'cmd_ok', kind, ip, result }));
+      })
+      .catch((err) => {
+        const message = (err instanceof Error) ? err.message : String(err);
+        clientWs.send(JSON.stringify({ type: 'cmd_error', kind, ip, error: message }));
+        broadcastToWebSocketClients('TCL_ERROR', message);
+      });
+  } catch (e) {
+    const message = (e instanceof Error) ? e.message : String(e);
+    clientWs.send(JSON.stringify({ type: 'error', message }));
   }
 }
 
