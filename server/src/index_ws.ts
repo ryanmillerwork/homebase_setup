@@ -272,23 +272,7 @@ class HomebaseWS {
 
       // Initial sync: touch all subscribed keys to seed values immediately
       HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.touch(m));
-      // Test command: dservGet ess/status
-      this.eval('dservGet ess/status', 5000)
-        .then((result) => {
-          console.log('[HBWS] Test eval result (dservGet ess/status):', result);
-        })
-        .catch((err) => {
-          console.error('[HBWS] Test eval failed:', err);
-        });
-
-      // Test git status via WS (non-destructive)
-      this.eval('send git {git::status}', 15000)
-        .then((result) => {
-          console.log('[HBWS] Test git status result:', result);
-        })
-        .catch((err) => {
-          console.error('[HBWS] Test git status failed:', err);
-        });
+      
     });
 
     this.ws.on('message', (data: RawData) => {
