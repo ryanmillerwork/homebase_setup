@@ -392,7 +392,7 @@ class HomebaseWS {
     }
 
     if (msg && msg.type === 'datapoint') {
-      // Step 2: log datapoints and emit simulated DB upserts for tracked fields
+      // Process datapoints (no noisy logs)
       this.processDatapointForLogging(String(msg.name || ''), String(msg.data ?? ''));
       return;
     }
@@ -402,7 +402,7 @@ class HomebaseWS {
       if (msg.status === 'error' && typeof msg.error === 'string' && msg.error.includes('Datapoint not found')) {
         return;
       }
-      console.log('[HBWS] Control:', msg);
+      // Suppress control logs to reduce noise
       return;
     }
 
