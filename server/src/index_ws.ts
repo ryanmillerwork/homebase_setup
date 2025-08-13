@@ -80,7 +80,8 @@ const HOMEBASE_SUBSCRIPTIONS = [
 ];
 
 const DEFAULT_SUBSCRIBE_EVERY = 1;
-const HOMEBASE_ALLOWED_IPS = ['192.168.4.201'];
+// Empty list means allow all IPs discovered from DB
+const HOMEBASE_ALLOWED_IPS: string[] = [];
 // Legacy TCP refresh is deprecated and disabled in index_ws.ts
 
 const app = express();
@@ -714,7 +715,7 @@ class HomebaseWS {
 const homebaseConnections: Map<string, HomebaseWS> = new Map();
 
 function getHomebaseWS(ip: string): HomebaseWS | null {
-  if (!HOMEBASE_ALLOWED_IPS.includes(ip)) {
+  if (HOMEBASE_ALLOWED_IPS.length > 0 && !HOMEBASE_ALLOWED_IPS.includes(ip)) {
     console.warn('[HBWS] Requested IP not allowed:', ip);
     return null;
   }
@@ -1528,7 +1529,18 @@ const startWebServer = (staticPath: string): void => {
 
 pingDevices(); setInterval(pingDevices, 10000);
 // startWebSocketServer(); // Temporarily disabled to avoid port conflict on 8080
-// Initialize Homebase WebSocket client for 192.168.4.201 (Step 1)
-const hbWS = new HomebaseWS('192.168.4.201');
-hbWS.connect();
+// Initialize Homebase WebSocket clients for all known devices
+(async () => {
+  try {
+    const devices: CommStatus[] = (await pool.query<CommStatus>("SELECT device, address FROM comm_status;" )).rows as any;
+    devices.forEach(({ address }) => {
+      const hb = getHomebaseWS(address);
+      if (hb) {
+        // connect() is called in getHomebaseWS on first creation
+      }
+    });
+  } catch (e) {
+    console.error('[HBWS] Failed to bootstrap HB WS clients from comm_status:', e);
+  }
+})();
 // startWebServer(webpage_path); // Temporarily disabled to avoid port conflict during WS client testing
