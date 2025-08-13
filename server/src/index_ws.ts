@@ -411,8 +411,6 @@ class HomebaseWS {
   }
 
   private processDatapointForLogging(name: string, value: string): void {
-    console.log('[HBWS] Datapoint:', name, value);
-
     const lowerName = name.toLowerCase();
     const host = this.hostIp;
 
