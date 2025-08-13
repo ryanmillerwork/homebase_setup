@@ -130,6 +130,7 @@ class HomebaseWS {
   private readonly requestMap: Map<string, PendingRequest> = new Map();
   private readonly isChunkedMessageKey = 'isChunkedMessage';
   private readonly chunkBuffers: Map<string, { chunks: string[]; total: number }> = new Map();
+  private readonly maxChunkTotal = 2000; // safety guard against pathological chunk counts
   private firstDisconnectAtMs: number | null = null;
   private slowPhaseStartFailures: number | null = null;
   private consecutiveFailures = 0;
@@ -146,6 +147,13 @@ class HomebaseWS {
   private connectTimedOut = false;
   private lastErrorCode: string | null = null;
   private lastUrl: string = '';
+
+  // Request queueing & in-flight limiting
+  private readonly maxQueueSize = 200;
+  private readonly maxInFlight = 8;
+  private currentInFlight = 0;
+  private evalQueue: Array<{ script: string; timeoutMs: number; resolve: (v: unknown)=>void; reject: (e?: unknown)=>void; enqueuedAt: number }>
+    = [];
 
   constructor(hostIp: string, port = 2565, path = '/ws') {
     this.hostIp = hostIp;
@@ -223,6 +231,10 @@ class HomebaseWS {
           const chunkIndex = Number(msg.chunkIndex || 0);
           const totalChunks = Number(msg.totalChunks || 0);
           const chunkData = String(msg.data || '');
+          if (!Number.isFinite(totalChunks) || totalChunks <= 0 || totalChunks > this.maxChunkTotal) {
+            console.warn('[HBWS] Dropping chunked message with invalid totalChunks:', totalChunks);
+            return;
+          }
           if (!this.chunkBuffers.has(messageId)) {
             this.chunkBuffers.set(messageId, { chunks: new Array(totalChunks).fill(''), total: totalChunks });
           }
@@ -276,6 +288,8 @@ class HomebaseWS {
     if (msg && msg.requestId && this.requestMap.has(msg.requestId)) {
       const pending = this.requestMap.get(msg.requestId)!;
       this.requestMap.delete(msg.requestId);
+      this.currentInFlight = Math.max(0, this.currentInFlight - 1);
+      this.tryDrainQueue();
       if (msg.status === 'ok') {
         pending.resolve(msg.result);
       } else {
@@ -414,22 +428,66 @@ class HomebaseWS {
   }
 
   eval(script: string, timeoutMs = 10000): Promise<unknown> {
-    const requestId = this.genRequestId();
-    return new Promise((resolve, reject) => {
+    const attemptImmediate = () => {
+      const requestId = this.genRequestId();
+      return new Promise<unknown>((resolve, reject) => {
+        try {
+          this.getOpenSocket();
+          const timeoutId = setTimeout(() => {
+            if (this.requestMap.has(requestId)) {
+              this.requestMap.delete(requestId);
+              this.currentInFlight = Math.max(0, this.currentInFlight - 1);
+              reject(new Error(`Request timed out: ${script}`));
+              this.tryDrainQueue();
+            }
+          }, timeoutMs);
+          this.requestMap.set(requestId, { resolve, reject, timeoutId });
+          this.currentInFlight += 1;
+          this.send({ cmd: 'eval', script, requestId });
+        } catch (e) {
+          reject(e);
+        }
+      });
+    };
+
+    // If socket open and we have capacity, send now
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.currentInFlight < this.maxInFlight) {
+      return attemptImmediate();
+    }
+
+    // Otherwise queue the request to run after reconnect or when capacity frees
+    return new Promise<unknown>((resolve, reject) => {
+      if (this.evalQueue.length >= this.maxQueueSize) {
+        reject(new Error('Request queue full'));
+        return;
+      }
+      this.evalQueue.push({ script, timeoutMs, resolve, reject, enqueuedAt: Date.now() });
+      this.tryDrainQueue();
+    });
+  }
+
+  private tryDrainQueue(): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    while (this.currentInFlight < this.maxInFlight && this.evalQueue.length > 0) {
+      const job = this.evalQueue.shift()!;
+      // Reuse eval immediate logic
+      const requestId = this.genRequestId();
       try {
-        this.getOpenSocket();
         const timeoutId = setTimeout(() => {
           if (this.requestMap.has(requestId)) {
             this.requestMap.delete(requestId);
-            reject(new Error(`Request timed out: ${script}`));
+            this.currentInFlight = Math.max(0, this.currentInFlight - 1);
+            job.reject(new Error(`Request timed out: ${job.script}`));
+            this.tryDrainQueue();
           }
-        }, timeoutMs);
-        this.requestMap.set(requestId, { resolve, reject, timeoutId });
-        this.send({ cmd: 'eval', script, requestId });
+        }, job.timeoutMs);
+        this.requestMap.set(requestId, { resolve: job.resolve, reject: job.reject, timeoutId });
+        this.currentInFlight += 1;
+        this.send({ cmd: 'eval', script: job.script, requestId });
       } catch (e) {
-        reject(e);
+        job.reject(e);
       }
-    });
+    }
   }
 
   subscribe(match: string, every: number = 1): void {
