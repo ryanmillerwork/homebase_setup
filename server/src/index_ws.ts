@@ -141,6 +141,9 @@ class HomebaseWS {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly connectTimeoutMs = 8000;
   private connectTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  private openedThisAttempt = false;
+  private connectTimedOut = false;
+  private lastErrorCode: string | null = null;
 
   constructor(hostIp: string, port = 2565, path = '/ws') {
     this.hostIp = hostIp;
@@ -159,11 +162,16 @@ class HomebaseWS {
     console.log(`[HBWS] Connecting to ${url}`);
     this.connecting = true;
     this.ws = new WebSocket(url);
+    this.openedThisAttempt = false;
+    this.connectTimedOut = false;
+    this.lastErrorCode = null;
 
     // Connection attempt timeout to avoid hanging CONNECTING state
     if (this.connectTimeoutHandle) clearTimeout(this.connectTimeoutHandle);
     this.connectTimeoutHandle = setTimeout(() => {
       if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+        this.connectTimedOut = true;
+        console.warn('[HBWS] Connect attempt timed out');
         try { this.ws.terminate(); } catch {}
       }
     }, this.connectTimeoutMs);
@@ -172,6 +180,8 @@ class HomebaseWS {
       console.log('[HBWS] Connected');
       this.connecting = false;
       if (this.connectTimeoutHandle) { clearTimeout(this.connectTimeoutHandle); this.connectTimeoutHandle = null; }
+      this.openedThisAttempt = true;
+      this.connectTimedOut = false;
       this.reconnectAttempts = 0;
       this.firstDisconnectAtMs = null;
       this.slowPhaseStartFailures = null;
@@ -227,7 +237,15 @@ class HomebaseWS {
 
     this.ws.on('close', (code: number, reason: unknown) => {
       const reasonText = typeof reason === 'string' ? reason : '';
-      console.warn(`[HBWS] Disconnected (code=${code}, reason=${reasonText || 'n/a'})`);
+      if (this.openedThisAttempt) {
+        console.warn(`[HBWS] Disconnected (code=${code}, reason=${reasonText || 'n/a'})`);
+      } else if (this.connectTimedOut) {
+        console.warn('[HBWS] Connect failed (timeout)');
+      } else if (this.lastErrorCode) {
+        console.warn(`[HBWS] Connect failed (${this.lastErrorCode})`);
+      } else {
+        console.warn('[HBWS] Connect failed');
+      }
       this.connecting = false;
       if (this.connectTimeoutHandle) { clearTimeout(this.connectTimeoutHandle); this.connectTimeoutHandle = null; }
       this.ws = null;
@@ -235,9 +253,10 @@ class HomebaseWS {
     });
 
     this.ws.on('error', (err: unknown) => {
-      // Print concise error code only
-      const code = (err as any)?.code || (err as any)?.errno || 'ERR';
-      if (code === 'EHOSTUNREACH' || code === 'ECONNREFUSED') {
+      // Capture error code for close handler context
+      const code = (err as any)?.code || (err as any)?.errno || null;
+      this.lastErrorCode = code;
+      if (code) {
         console.warn(`[HBWS] Socket error: ${code}`);
       } else {
         console.warn('[HBWS] Socket error');
