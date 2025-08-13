@@ -129,6 +129,8 @@ class HomebaseWS {
     this.ws.on('open', () => {
       console.log('[HBWS] Connected');
       this.reconnectAttempts = 0;
+      // Subscribe to ESS topics so we receive status changes
+      this.subscribe('ess/*', 1);
       // Test command: dservGet ess/status
       this.eval('dservGet ess/status', 5000)
         .then((result) => {
@@ -204,6 +206,12 @@ class HomebaseWS {
     if (msg && msg.type === 'datapoint') {
       // Step 1: just log datapoints
       console.log('[HBWS] Datapoint:', msg.name, msg.data);
+      return;
+    }
+
+    // Log subscription acks and other control messages
+    if (msg && (msg.status || msg.action)) {
+      console.log('[HBWS] Control:', msg);
       return;
     }
 
