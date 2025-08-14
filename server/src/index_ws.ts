@@ -491,8 +491,8 @@ class HomebaseWS {
     // periodic juicer voltage poll every 10s
     this.pollJuicerTimer = setInterval(() => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-      const script = '[set ::ess::current(juicer)] get pump_voltage';
-      this.eval(script, 5000)
+      const voltageScript = '[set ::ess::current(juicer)] get pump_voltage';
+      this.eval(voltageScript, 5000)
         .then((result) => {
           let voltage: number | null = null;
           try {
@@ -519,10 +519,48 @@ class HomebaseWS {
           } catch {}
 
           if (voltage !== null) {
-            const changed = this.updateLocalStatusAndBroadcast(this.hostIp, 'juicer', 'pump_voltage', voltage);
+            const changed = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', '24v-v', voltage);
             if (changed) {
-              console.log(`[HBWS][STATUS] ${this.hostIp} juicer/pump_voltage=${voltage}`);
-              this.logSimulatedUpsert(this.hostIp, 'juicer', 'pump_voltage', voltage);
+              console.log(`[HBWS][STATUS] ${this.hostIp} system/24v-v=${voltage}`);
+              this.logSimulatedUpsert(this.hostIp, 'system', '24v-v', voltage);
+            }
+          }
+        })
+        .catch(() => {});
+
+      // Also poll charging status
+      const chargingScript = '$::ess::current(juicer) get charging';
+      this.eval(chargingScript, 5000)
+        .then((result) => {
+          let charging: number | null = null;
+          try {
+            if (typeof result === 'string') {
+              const trimmed = result.trim();
+              if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                const obj = JSON.parse(trimmed);
+                if (obj && typeof obj === 'object' && 'charging' in obj) {
+                  const v = (obj as any).charging;
+                  const n = typeof v === 'number' ? v : parseFloat(String(v));
+                  if (!isNaN(n)) charging = n;
+                }
+              } else {
+                const n = parseFloat(trimmed);
+                if (!isNaN(n)) charging = n;
+              }
+            } else if (typeof result === 'number') {
+              charging = result;
+            } else if (result && typeof result === 'object' && 'charging' in (result as any)) {
+              const v = (result as any).charging;
+              const n = typeof v === 'number' ? v : parseFloat(String(v));
+              if (!isNaN(n)) charging = n;
+            }
+          } catch {}
+
+          if (charging !== null) {
+            const changed = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', 'charging', charging);
+            if (changed) {
+              console.log(`[HBWS][STATUS] ${this.hostIp} system/charging=${charging}`);
+              this.logSimulatedUpsert(this.hostIp, 'system', 'charging', charging);
             }
           }
         })
