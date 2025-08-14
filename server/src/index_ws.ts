@@ -567,13 +567,13 @@ class HomebaseWS {
           // Temporary debug: parsed value
           try { console.log(`[HBWS][CHARGING-PARSE] ${this.hostIp} parsed=`, chargingStr); } catch {}
 
-          if (chargingStr !== null) {
+          if (chargingStr === 'true' || chargingStr === 'false') {
             const changed = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', 'charging', chargingStr);
             if (changed) {
               console.log(`[HBWS][STATUS] ${this.hostIp} system/charging=${chargingStr}`);
               this.logSimulatedUpsert(this.hostIp, 'system', 'charging', chargingStr);
             }
-          }
+          } // else ignore unknown/invalid values
         })
         .catch(() => {});
     }, 10000);
