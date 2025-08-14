@@ -529,7 +529,7 @@ class HomebaseWS {
         .catch(() => {});
 
       // Also poll charging status
-      const chargingScript = '$::ess::current(juicer) get charging';
+      const chargingScript = '[set ::ess::current(juicer)] get charging';
       this.eval(chargingScript, 5000)
         .then((result) => {
           let charging: number | null = null;
