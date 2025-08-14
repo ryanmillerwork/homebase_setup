@@ -444,14 +444,17 @@ class HomebaseWS {
   }
 
   private async logSimulatedUpsert(host: string, status_source: string, status_type: string, status_value: string | number): Promise<void> {
-    const payload = {
-      table: 'server_status',
-      action: 'upsert',
-      values: { host, status_source, status_type, status_value },
-      server_time: 'NOW()',
-      note: 'simulated - not executed by index_ws.ts'
-    };
-    console.log('[HBWS][SIMULATED-UPSERT]', JSON.stringify(payload));
+    try {
+      await pool.query(
+        `INSERT INTO server_status (host, status_source, status_type, status_value, server_time)
+         VALUES ($1, $2, $3, $4, NOW())
+         ON CONFLICT (host, status_source, status_type)
+         DO UPDATE SET status_value = EXCLUDED.status_value, server_time = NOW();`,
+        [host, status_source, status_type, String(status_value)]
+      );
+    } catch (e) {
+      console.error('[HBWS] DB upsert error:', e);
+    }
   }
 
   private startHeartbeat(): void {
