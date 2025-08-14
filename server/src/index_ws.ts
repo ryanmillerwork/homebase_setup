@@ -80,8 +80,8 @@ const HOMEBASE_SUBSCRIPTIONS = [
 ];
 
 const DEFAULT_SUBSCRIBE_EVERY = 1;
-// Restrict to a single HB during testing
-const HOMEBASE_ALLOWED_IPS: string[] = ['192.168.4.201'];
+// Empty means allow all HBs discovered from DB
+const HOMEBASE_ALLOWED_IPS: string[] = [];
 // Legacy TCP refresh is deprecated and disabled in index_ws.ts
 
 const app = express();
@@ -444,17 +444,14 @@ class HomebaseWS {
   }
 
   private async logSimulatedUpsert(host: string, status_source: string, status_type: string, status_value: string | number): Promise<void> {
-    try {
-      await pool.query(
-        `INSERT INTO server_status (host, status_source, status_type, status_value, server_time)
-         VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT (host, status_source, status_type)
-         DO UPDATE SET status_value = EXCLUDED.status_value, server_time = NOW();`,
-        [host, status_source, status_type, String(status_value)]
-      );
-    } catch (e) {
-      console.error('[HBWS] DB upsert error:', e);
-    }
+    const payload = {
+      table: 'server_status',
+      action: 'upsert',
+      values: { host, status_source, status_type, status_value },
+      server_time: 'NOW()',
+      note: 'simulated - not executed by index_ws.ts'
+    };
+    console.log('[HBWS][SIMULATED-UPSERT]', JSON.stringify(payload));
   }
 
   private startHeartbeat(): void {
@@ -1576,6 +1573,15 @@ const startWebServer = (staticPath: string): void => {
 pingDevices(); setInterval(pingDevices, 10000);
 // startWebSocketServer(); // Temporarily disabled to avoid port conflict on 8080
 // Initialize Homebase WebSocket clients for all known devices
-// Initialize single HB client
-const hbWS = getHomebaseWS('192.168.4.201');
+// Initialize Homebase WebSocket clients for all known devices
+(async () => {
+  try {
+    const devices: CommStatus[] = (await pool.query<CommStatus>("SELECT device, address FROM comm_status;" )).rows as any;
+    devices.forEach(({ address }) => {
+      getHomebaseWS(address);
+    });
+  } catch (e) {
+    console.error('[HBWS] Failed to bootstrap HB WS clients from comm_status:', e);
+  }
+})();
 // startWebServer(webpage_path); // Temporarily disabled to avoid port conflict during WS client testing
