@@ -424,7 +424,7 @@ if __name__ == "__main__":
     print(f"[{datetime.now()}] Initial inference outbox processing...")
     process_inference_outbox()
     print("Initial outbox processing complete.")
-    threading.Thread(target=periodic_status_sync, daemon=True).start()
+    # threading.Thread(target=periodic_status_sync, daemon=True).start()
     threading.Thread(target=inference_outbox_worker, daemon=True).start()
     print(f"[{datetime.now()}] Starting notification listener...")
     listen()
