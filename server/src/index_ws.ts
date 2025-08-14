@@ -220,6 +220,7 @@ class HomebaseWS {
   private staleCheckTimer: ReturnType<typeof setInterval> | null = null;
   private lastHeartbeatSentAt = 0;
   private lastValues: Map<string, string> = new Map();
+  private pollJuicerTimer: ReturnType<typeof setInterval> | null = null;
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(hostIp: string, port = 2565, path = '/ws') {
@@ -489,6 +490,47 @@ class HomebaseWS {
         try { this.touch(m); } catch {}
       });
     }, 60000);
+
+    // periodic juicer voltage poll every 10s
+    this.pollJuicerTimer = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      const script = '[set ::ess::current(juicer)] get pump_voltage';
+      this.eval(script, 5000)
+        .then((result) => {
+          let voltage: number | null = null;
+          try {
+            if (typeof result === 'string') {
+              const trimmed = result.trim();
+              if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                const obj = JSON.parse(trimmed);
+                if (obj && typeof obj === 'object' && 'pump_voltage' in obj) {
+                  const v = (obj as any).pump_voltage;
+                  const n = typeof v === 'number' ? v : parseFloat(String(v));
+                  if (!isNaN(n)) voltage = n;
+                }
+              } else {
+                const n = parseFloat(trimmed);
+                if (!isNaN(n)) voltage = n;
+              }
+            } else if (typeof result === 'number') {
+              voltage = result;
+            } else if (result && typeof result === 'object' && 'pump_voltage' in (result as any)) {
+              const v = (result as any).pump_voltage;
+              const n = typeof v === 'number' ? v : parseFloat(String(v));
+              if (!isNaN(n)) voltage = n;
+            }
+          } catch {}
+
+          if (voltage !== null) {
+            const changed = this.updateLocalStatusAndBroadcast(this.hostIp, 'juicer', 'pump_voltage', voltage);
+            if (changed) {
+              console.log(`[HBWS][STATUS] ${this.hostIp} juicer/pump_voltage=${voltage}`);
+              this.logSimulatedUpsert(this.hostIp, 'juicer', 'pump_voltage', voltage);
+            }
+          }
+        })
+        .catch(() => {});
+    }, 10000);
   }
 
   private stopHeartbeat(): void {
@@ -496,6 +538,7 @@ class HomebaseWS {
     if (this.heartbeatTimeoutHandle) { clearTimeout(this.heartbeatTimeoutHandle); this.heartbeatTimeoutHandle = null; }
     if (this.staleCheckTimer) { clearInterval(this.staleCheckTimer); this.staleCheckTimer = null; }
     if (this.refreshTimer) { clearInterval(this.refreshTimer); this.refreshTimer = null; }
+    if (this.pollJuicerTimer) { clearInterval(this.pollJuicerTimer); this.pollJuicerTimer = null; }
   }
 
   private simulateConnectivityUpsert(connected: 0 | 1): void {
