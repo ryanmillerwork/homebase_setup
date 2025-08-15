@@ -81,7 +81,7 @@ const HOMEBASE_SUBSCRIPTIONS = [
 
 const DEFAULT_SUBSCRIBE_EVERY = 1;
 // Empty means allow all HBs discovered from DB
-const HOMEBASE_ALLOWED_IPS: string[] = [];
+const HOMEBASE_ALLOWED_IPS: string[] = ['192.168.4.104'];
 // Legacy TCP refresh is deprecated and disabled in index_ws.ts
 
 const app = express();
