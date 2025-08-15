@@ -1623,7 +1623,7 @@ const startWebServer = (staticPath: string): void => {
 
 
 pingDevices(); setInterval(pingDevices, 10000);
-// startWebSocketServer(); // Temporarily disabled to avoid port conflict on 8080
+startWebSocketServer();
 // Initialize Homebase WebSocket clients for all known devices
 // Initialize Homebase WebSocket clients for all known devices
 (async () => {
@@ -1636,4 +1636,4 @@ pingDevices(); setInterval(pingDevices, 10000);
     console.error('[HBWS] Failed to bootstrap HB WS clients from comm_status:', e);
   }
 })();
-// startWebServer(webpage_path); // Temporarily disabled to avoid port conflict during WS client testing
+startWebServer(webpage_path);
