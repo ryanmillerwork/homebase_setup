@@ -271,7 +271,7 @@ class HomebaseWS {
       this.startHeartbeat();
       this.simulateConnectivityUpsert(1);
       // Subscribe only to the datapoints we care about (from top-level list)
-      HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.subscribe(m, DEFAULT_SUBSCRIBE_EVERY));
+      // HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.subscribe(m, DEFAULT_SUBSCRIBE_EVERY));
 
       // Initial sync: touch all subscribed keys to seed values immediately
       // HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.touch(m));
