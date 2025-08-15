@@ -401,6 +401,11 @@ class HomebaseWS {
     const lowerName = name.toLowerCase();
     const host = this.hostIp;
 
+    // Diagnostic: log all loading_progress datapoints before any de-duplication
+    if (lowerName === 'ess/loading_progress') {
+      try { console.log(`[HBWS][LOADPROG-WS] host=${host} raw=`, value); } catch {}
+    }
+
     // Compute source/type per rules
     let status_source = '';
     let status_type = '';
@@ -1334,6 +1339,10 @@ function isRecentStatsChanges(payload: any): payload is RecentStatsChanges {
 
 // Specific handlers using the generic function
 function handleStatusChanges(payload: StatusChanges) {
+  // Diagnostic: log all loading_progress updates from DB notifications before any local de-duplication
+  if (payload.status_type === 'loading_progress') {
+    try { console.log(`[HBWS][LOADPROG-DB] host=${payload.host} raw=`, payload.status_value, 'sys_time=', payload.sys_time); } catch {}
+  }
   // console.log('status change: ', payload)
   handleNotification('status_changes', payload, statusData, (entry) =>
     entry.host === payload.host && entry.status_type === payload.status_type
