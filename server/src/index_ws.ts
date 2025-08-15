@@ -450,6 +450,10 @@ class HomebaseWS {
 
   private async logSimulatedUpsert(host: string, status_source: string, status_type: string, status_value: string | number): Promise<void> {
     try {
+      // Diagnostic: identify our own writes for loading_progress
+      if (status_type === 'loading_progress') {
+        try { console.log(`[HBWS][LOADPROG-OUR-UPsert] host=${host} value=`, status_value); } catch {}
+      }
       await pool.query(
         `INSERT INTO server_status (host, status_source, status_type, status_value, server_time)
          VALUES ($1, $2, $3, $4, NOW())
@@ -1341,7 +1345,10 @@ function isRecentStatsChanges(payload: any): payload is RecentStatsChanges {
 function handleStatusChanges(payload: StatusChanges) {
   // Diagnostic: log all loading_progress updates from DB notifications before any local de-duplication
   if (payload.status_type === 'loading_progress') {
-    try { console.log(`[HBWS][LOADPROG-DB] host=${payload.host} raw=`, payload.status_value, 'sys_time=', payload.sys_time); } catch {}
+    try {
+      const serverTime = (payload as any)?.server_time ?? (payload as any)?.sys_time;
+      console.log(`[HBWS][LOADPROG-DB] host=${payload.host} raw=`, payload.status_value, 'server_time=', serverTime);
+    } catch {}
   }
   // console.log('status change: ', payload)
   handleNotification('status_changes', payload, statusData, (entry) =>
