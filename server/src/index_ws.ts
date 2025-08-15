@@ -500,60 +500,60 @@ class HomebaseWS {
     //   });
     // }, 60000);
 
-    // periodic juicer voltage/charging poll every 10s (combined request)
-    this.pollJuicerTimer = setInterval(() => {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-      const combinedScript = '[set ::ess::current(juicer)] get pump_voltage charging';
-      this.eval(combinedScript, 5000)
-        .then((result) => {
-          let voltage: number | null = null;
-          let chargingStr: string | null = null;
-          try {
-            let obj: any = null;
-            if (typeof result === 'string') {
-              const trimmed = result.trim();
-              if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-                obj = JSON.parse(trimmed);
-              }
-            } else if (result && typeof result === 'object') {
-              obj = result;
-            }
-
-            if (obj && typeof obj === 'object') {
-              // pump_voltage
-              if ('pump_voltage' in obj) {
-                const v: any = (obj as any).pump_voltage;
-                const n = typeof v === 'number' ? v : parseFloat(String(v));
-                if (!isNaN(n)) voltage = n;
-              }
-              // charging
-              if ('charging' in obj) {
-                const c: any = (obj as any).charging;
-                if (typeof c === 'boolean') chargingStr = c ? 'true' : 'false';
-                else if (typeof c === 'number') chargingStr = String(c);
-                else if (typeof c === 'string') chargingStr = c.toLowerCase();
-              }
-            }
-          } catch {}
-
-          if (voltage !== null) {
-            const changedV = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', '24v-v', voltage);
-            if (changedV) {
-              console.log(`[HBWS][STATUS] ${this.hostIp} system/24v-v=${voltage}`);
-              this.logSimulatedUpsert(this.hostIp, 'system', '24v-v', voltage);
-            }
-          }
-
-          if (chargingStr === 'true' || chargingStr === 'false') {
-            const changedC = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', 'charging', chargingStr);
-            if (changedC) {
-              console.log(`[HBWS][STATUS] ${this.hostIp} system/charging=${chargingStr}`);
-              this.logSimulatedUpsert(this.hostIp, 'system', 'charging', chargingStr);
-            }
-          }
-        })
-        .catch(() => {});
-    }, 10000);
+    // periodic juicer voltage/charging poll every 10s (combined request) — disabled for debugging
+    // this.pollJuicerTimer = setInterval(() => {
+    //   if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    //   const combinedScript = '[set ::ess::current(juicer)] get pump_voltage charging';
+    //   this.eval(combinedScript, 5000)
+    //     .then((result) => {
+    //       let voltage: number | null = null;
+    //       let chargingStr: string | null = null;
+    //       try {
+    //         let obj: any = null;
+    //         if (typeof result === 'string') {
+    //           const trimmed = result.trim();
+    //           if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    //             obj = JSON.parse(trimmed);
+    //           }
+    //         } else if (result && typeof result === 'object') {
+    //           obj = result;
+    //         }
+    //
+    //         if (obj && typeof obj === 'object') {
+    //           // pump_voltage
+    //           if ('pump_voltage' in obj) {
+    //             const v: any = (obj as any).pump_voltage;
+    //             const n = typeof v === 'number' ? v : parseFloat(String(v));
+    //             if (!isNaN(n)) voltage = n;
+    //           }
+    //           // charging
+    //           if ('charging' in obj) {
+    //             const c: any = (obj as any).charging;
+    //             if (typeof c === 'boolean') chargingStr = c ? 'true' : 'false';
+    //             else if (typeof c === 'number') chargingStr = String(c);
+    //             else if (typeof c === 'string') chargingStr = c.toLowerCase();
+    //           }
+    //         }
+    //       } catch {}
+    //
+    //       if (voltage !== null) {
+    //         const changedV = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', '24v-v', voltage);
+    //         if (changedV) {
+    //           console.log(`[HBWS][STATUS] ${this.hostIp} system/24v-v=${voltage}`);
+    //           this.logSimulatedUpsert(this.hostIp, 'system', '24v-v', voltage);
+    //         }
+    //       }
+    //
+    //       if (chargingStr === 'true' || chargingStr === 'false') {
+    //         const changedC = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', 'charging', chargingStr);
+    //         if (changedC) {
+    //           console.log(`[HBWS][STATUS] ${this.hostIp} system/charging=${chargingStr}`);
+    //           this.logSimulatedUpsert(this.hostIp, 'system', 'charging', chargingStr);
+    //         }
+    //       }
+    //     })
+    //     .catch(() => {});
+    // }, 10000);
   }
 
   private stopHeartbeat(): void {
