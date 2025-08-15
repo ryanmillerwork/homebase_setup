@@ -491,92 +491,57 @@ class HomebaseWS {
       });
     }, 60000);
 
-    // periodic juicer voltage poll every 10s
+    // periodic juicer voltage/charging poll every 10s (combined request)
     this.pollJuicerTimer = setInterval(() => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-      const voltageScript = '[set ::ess::current(juicer)] get pump_voltage';
-      this.eval(voltageScript, 5000)
+      const combinedScript = '[set ::ess::current(juicer)] get pump_voltage charging';
+      this.eval(combinedScript, 5000)
         .then((result) => {
           let voltage: number | null = null;
+          let chargingStr: string | null = null;
           try {
+            let obj: any = null;
             if (typeof result === 'string') {
               const trimmed = result.trim();
               if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-                const obj = JSON.parse(trimmed);
-                if (obj && typeof obj === 'object' && 'pump_voltage' in obj) {
-                  const v = (obj as any).pump_voltage;
-                  const n = typeof v === 'number' ? v : parseFloat(String(v));
-                  if (!isNaN(n)) voltage = n;
-                }
-              } else {
-                const n = parseFloat(trimmed);
+                obj = JSON.parse(trimmed);
+              }
+            } else if (result && typeof result === 'object') {
+              obj = result;
+            }
+
+            if (obj && typeof obj === 'object') {
+              // pump_voltage
+              if ('pump_voltage' in obj) {
+                const v: any = (obj as any).pump_voltage;
+                const n = typeof v === 'number' ? v : parseFloat(String(v));
                 if (!isNaN(n)) voltage = n;
               }
-            } else if (typeof result === 'number') {
-              voltage = result;
-            } else if (result && typeof result === 'object' && 'pump_voltage' in (result as any)) {
-              const v = (result as any).pump_voltage;
-              const n = typeof v === 'number' ? v : parseFloat(String(v));
-              if (!isNaN(n)) voltage = n;
+              // charging
+              if ('charging' in obj) {
+                const c: any = (obj as any).charging;
+                if (typeof c === 'boolean') chargingStr = c ? 'true' : 'false';
+                else if (typeof c === 'number') chargingStr = String(c);
+                else if (typeof c === 'string') chargingStr = c.toLowerCase();
+              }
             }
           } catch {}
 
           if (voltage !== null) {
-            const changed = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', '24v-v', voltage);
-            if (changed) {
+            const changedV = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', '24v-v', voltage);
+            if (changedV) {
               console.log(`[HBWS][STATUS] ${this.hostIp} system/24v-v=${voltage}`);
               this.logSimulatedUpsert(this.hostIp, 'system', '24v-v', voltage);
             }
           }
-        })
-        .catch(() => {});
-
-      // Also poll charging status
-      const chargingScript = '[set ::ess::current(juicer)] get charging';
-      this.eval(chargingScript, 5000)
-        .then((result) => {
-          // Temporary debug: log all raw charging results
-          try { console.log(`[HBWS][CHARGING-POLL] ${this.hostIp} raw:`, result); } catch {}
-          let chargingStr: string | null = null;
-          try {
-            if (typeof result === 'string') {
-              const trimmed = result.trim();
-              if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-                const obj = JSON.parse(trimmed);
-                if (obj && typeof obj === 'object' && 'charging' in obj) {
-                  const v: any = (obj as any).charging;
-                  if (typeof v === 'boolean') chargingStr = v ? 'true' : 'false';
-                  else if (typeof v === 'number') chargingStr = String(v);
-                  else if (typeof v === 'string') chargingStr = v.toLowerCase();
-                }
-              } else if (trimmed.toLowerCase() === 'true' || trimmed.toLowerCase() === 'false') {
-                chargingStr = trimmed.toLowerCase();
-              } else {
-                const n = parseFloat(trimmed);
-                if (!isNaN(n)) chargingStr = String(n);
-              }
-            } else if (typeof result === 'boolean') {
-              chargingStr = result ? 'true' : 'false';
-            } else if (typeof result === 'number') {
-              chargingStr = String(result);
-            } else if (result && typeof result === 'object' && 'charging' in (result as any)) {
-              const v: any = (result as any).charging;
-              if (typeof v === 'boolean') chargingStr = v ? 'true' : 'false';
-              else if (typeof v === 'number') chargingStr = String(v);
-              else if (typeof v === 'string') chargingStr = v.toLowerCase();
-            }
-          } catch {}
-
-          // Temporary debug: parsed value
-          try { console.log(`[HBWS][CHARGING-PARSE] ${this.hostIp} parsed=`, chargingStr); } catch {}
 
           if (chargingStr === 'true' || chargingStr === 'false') {
-            const changed = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', 'charging', chargingStr);
-            if (changed) {
+            const changedC = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', 'charging', chargingStr);
+            if (changedC) {
               console.log(`[HBWS][STATUS] ${this.hostIp} system/charging=${chargingStr}`);
               this.logSimulatedUpsert(this.hostIp, 'system', 'charging', chargingStr);
             }
-          } // else ignore unknown/invalid values
+          }
         })
         .catch(() => {});
     }, 10000);
