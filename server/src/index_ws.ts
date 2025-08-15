@@ -81,7 +81,7 @@ const HOMEBASE_SUBSCRIPTIONS = [
 
 const DEFAULT_SUBSCRIBE_EVERY = 1;
 // Empty means allow all HBs discovered from DB
-const HOMEBASE_ALLOWED_IPS: string[] = ['192.168.4.104'];
+const HOMEBASE_ALLOWED_IPS: string[] = [];
 // Legacy TCP refresh is deprecated and disabled in index_ws.ts
 
 const app = express();
@@ -271,10 +271,10 @@ class HomebaseWS {
       this.startHeartbeat();
       this.simulateConnectivityUpsert(1);
       // Subscribe only to the datapoints we care about (from top-level list)
-      // HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.subscribe(m, DEFAULT_SUBSCRIBE_EVERY));
+      HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.subscribe(m, DEFAULT_SUBSCRIBE_EVERY));
 
       // Initial sync: touch all subscribed keys to seed values immediately
-      // HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.touch(m));
+      HOMEBASE_SUBSCRIPTIONS.forEach((m) => this.touch(m));
       
     });
 
@@ -493,12 +493,12 @@ class HomebaseWS {
     }, this.heartbeatIntervalMs);
 
     // periodic touch sweep once per minute to refresh possibly stale datapoints
-    // this.refreshTimer = setInterval(() => {
-    //   if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    //   HOMEBASE_SUBSCRIPTIONS.forEach((m) => {
-    //     try { this.touch(m); } catch {}
-    //   });
-    // }, 60000);
+    this.refreshTimer = setInterval(() => {
+      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+      HOMEBASE_SUBSCRIPTIONS.forEach((m) => {
+        try { this.touch(m); } catch {}
+      });
+    }, 60000);
 
     // periodic juicer voltage/charging poll every 10s (combined request) — disabled for debugging
     // this.pollJuicerTimer = setInterval(() => {
