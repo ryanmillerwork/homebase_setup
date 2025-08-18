@@ -21,6 +21,10 @@ const HOMEBASE_SUBSCRIPTIONS = [
   'system/hostname',
   'system/hostaddr',
   'system/os',
+  'system/24v-v',
+  'system/24v-a',
+  'system/12v-v',
+  'system/12v-a',
 
   // ESS core identity and state
   'ess/subject',
