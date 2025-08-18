@@ -50,6 +50,7 @@ const HOMEBASE_SUBSCRIPTIONS = [
   'ess/obs_id',
   'ess/obs_total',
   'ess/obs_count',
+  'ess/last_completed',
 
   // Files and dirs
   'ess/data_dir',
