@@ -50,7 +50,7 @@ const HOMEBASE_SUBSCRIPTIONS = [
   'ess/obs_id',
   'ess/obs_total',
   'ess/obs_count',
-  'ess/last_completed',
+  'ess/last_trial_time_ms',
 
   // Files and dirs
   'ess/data_dir',
@@ -458,6 +458,8 @@ class HomebaseWS {
       // Diagnostic: identify our own writes for loading_progress
       if (status_type === 'loading_progress') {
         try { console.log(`[HBWS][LOADPROG-OUR-UPsert] host=${host} value=`, status_value); } catch {}
+        await this.upsertLoadingProgressMonotonic(host, String(status_value));
+        return;
       }
       await pool.query(
         `INSERT INTO server_status (host, status_source, status_type, status_value, server_time)
@@ -469,6 +471,31 @@ class HomebaseWS {
     } catch (e) {
       console.error('[HBWS] DB upsert error:', e);
     }
+  }
+
+  // Monotonic UPSERT for loading_progress to prevent out-of-order regressions
+  private async upsertLoadingProgressMonotonic(host: string, statusJson: string): Promise<void> {
+    const sql = `
+      INSERT INTO server_status (host, status_source, status_type, status_value, server_time)
+      VALUES ($1, 'ess', 'loading_progress', $2, NOW())
+      ON CONFLICT (host, status_source, status_type)
+      DO UPDATE
+      SET status_value = EXCLUDED.status_value,
+          server_time  = NOW()
+      WHERE
+        ((server_status.status_value)::jsonb->>'operation_id') IS DISTINCT FROM ((EXCLUDED.status_value)::jsonb->>'operation_id')
+        OR (
+          ((EXCLUDED.status_value)::jsonb->>'operation_id') = ((server_status.status_value)::jsonb->>'operation_id')
+          AND (
+            (((EXCLUDED.status_value)::jsonb->>'percent')::int > ((server_status.status_value)::jsonb->>'percent')::int)
+            OR (
+              ((EXCLUDED.status_value)::jsonb->>'percent')::int = ((server_status.status_value)::jsonb->>'percent')::int
+              AND COALESCE(((EXCLUDED.status_value)::jsonb->>'timestamp')::bigint, 0) >= COALESCE(((server_status.status_value)::jsonb->>'timestamp')::bigint, 0)
+            )
+          )
+        );
+    `;
+    await pool.query(sql, [host, statusJson]);
   }
 
   private startHeartbeat(): void {
