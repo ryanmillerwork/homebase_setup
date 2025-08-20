@@ -72,6 +72,7 @@ const HOMEBASE_SUBSCRIPTIONS = [
 
   // Params / scripts / mappings
   'ess/variant_info',
+  'ess/variant_info_json',
   'ess/param_settings',
   'ess/params',
 
@@ -407,9 +408,9 @@ class HomebaseWS {
     const host = this.hostIp;
 
     // Diagnostic: log all loading_progress datapoints before any de-duplication
-    if (lowerName === 'ess/loading_progress') {
-      try { console.log(`[HBWS][LOADPROG-WS] host=${host} raw=`, value); } catch {}
-    }
+    // if (lowerName === 'ess/loading_progress') {
+    //   try { console.log(`[HBWS][LOADPROG-WS] host=${host} raw=`, value); } catch {}
+    // }
 
     // Compute source/type per rules
     let status_source = '';
@@ -457,7 +458,7 @@ class HomebaseWS {
     try {
       // Diagnostic: identify our own writes for loading_progress
       if (status_type === 'loading_progress') {
-        try { console.log(`[HBWS][LOADPROG-OUR-UPsert] host=${host} value=`, status_value); } catch {}
+        // try { console.log(`[HBWS][LOADPROG-OUR-UPsert] host=${host} value=`, status_value); } catch {}
         await this.upsertLoadingProgressMonotonic(host, String(status_value));
         return;
       }
@@ -571,7 +572,6 @@ class HomebaseWS {
           if (voltage !== null) {
             const changedV = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', '24v-v', voltage);
             if (changedV) {
-              console.log(`[HBWS][STATUS] ${this.hostIp} system/24v-v=${voltage}`);
               this.logSimulatedUpsert(this.hostIp, 'system', '24v-v', voltage);
             }
           }
@@ -579,7 +579,6 @@ class HomebaseWS {
           if (chargingStr === 'true' || chargingStr === 'false') {
             const changedC = this.updateLocalStatusAndBroadcast(this.hostIp, 'system', 'charging', chargingStr);
             if (changedC) {
-              console.log(`[HBWS][STATUS] ${this.hostIp} system/charging=${chargingStr}`);
               this.logSimulatedUpsert(this.hostIp, 'system', 'charging', chargingStr);
             }
           }
