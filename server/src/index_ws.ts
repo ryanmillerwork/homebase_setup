@@ -851,6 +851,8 @@ async function startWebSocketServer() {
       msg?.msg_type === 'Addsubject' && addAnimal(msg.msg); // Add animal to database
       msg?.msg_type === 'sql_query' && sqlQuery(msg.msg, ws); // Get resp from db
       msg?.msg_type === 'get_options' && getOptions(msg.msg, ws); // Get resp from db
+      if (msg?.msg_type === 'preset_save') handlePresetSave(String(msg.ip || ''), ws);
+      if (msg?.msg_type === 'preset_load') handlePresetLoad(String(msg.ip || ''), ws);
     });
 
     ws.on('close', () => {
@@ -1510,6 +1512,69 @@ function handleEssGitCommand(kind: 'ess' | 'git', ip: string, payload: string, c
   } catch (e) {
     const message = (e instanceof Error) ? e.message : String(e);
     clientWs.send(JSON.stringify({ type: 'error', message }));
+  }
+}
+
+
+// Preset: Save current settings for a given homebase IP using DB function
+async function handlePresetSave(ip: string, clientWs: WebSocket): Promise<void> {
+  try {
+    if (!ip || typeof ip !== 'string') {
+      clientWs.send(JSON.stringify({ type: 'preset_save_error', ip, error: 'invalid ip' }));
+      return;
+    }
+    await pool.query('SELECT save_task_settings($1)', [ip]);
+    clientWs.send(JSON.stringify({ type: 'preset_save_ok', ip }));
+  } catch (e) {
+    const message = (e instanceof Error) ? e.message : String(e);
+    clientWs.send(JSON.stringify({ type: 'preset_save_error', ip, error: message }));
+  }
+}
+
+// Preset: Load saved settings and apply to the specified homebase
+async function handlePresetLoad(ip: string, clientWs: WebSocket): Promise<void> {
+  try {
+    if (!ip || typeof ip !== 'string') {
+      clientWs.send(JSON.stringify({ type: 'preset_load_error', ip, error: 'invalid ip' }));
+      return;
+    }
+
+    // Query DB for saved settings matching current subject/project/system/protocol/variant
+    const { rows } = await pool.query<{ result_status: string; variant_args: string; param_settings: string }>(
+      'SELECT * FROM retrieve_task_settings($1)',
+      [ip]
+    );
+
+    const row = rows?.[0];
+    if (!row || row.result_status !== 'found') {
+      clientWs.send(JSON.stringify({ type: 'preset_load_error', ip, error: 'row not found' }));
+      return;
+    }
+
+    const variantArgs = String(row.variant_args || '').trim();
+    const paramSettings = String(row.param_settings || '').trim();
+
+    if (!variantArgs || !paramSettings) {
+      clientWs.send(JSON.stringify({ type: 'preset_load_error', ip, error: 'invalid saved settings' }));
+      return;
+    }
+
+    // Ensure HB connection exists
+    const hb = getHomebaseWS(ip);
+    if (!hb) {
+      clientWs.send(JSON.stringify({ type: 'preset_load_error', ip, error: `HBWS not allowed or unavailable for ${ip}` }));
+      return;
+    }
+
+    // Build a single script to ensure ordering and a single reply
+    const script = `::ess::set_params ${paramSettings}; ::ess::set_variant_args ${variantArgs}; ::ess::reload_variant`;
+    await hb.eval(script, 20000);
+
+    clientWs.send(JSON.stringify({ type: 'preset_load_ok', ip }));
+  } catch (e) {
+    const message = (e instanceof Error) ? e.message : String(e);
+    clientWs.send(JSON.stringify({ type: 'preset_load_error', ip, error: message }));
+    broadcastToWebSocketClients('TCL_ERROR', message);
   }
 }
 
