@@ -843,7 +843,13 @@ async function startWebSocketServer() {
     ws.send(JSON.stringify({ type: 'perfStats', data: perfStatsData }));
 
     ws.on('message', (message: string) => {
-      let msg = JSON.parse(message);
+      let msg: any;
+      try {
+        msg = JSON.parse(message);
+      } catch (e) {
+        try { ws.send(JSON.stringify({ type: 'error', message: 'must be valid json string' })); } catch {}
+        return;
+      }
       console.log('Received message from client:', msg);
       if (msg?.msg_type === 'esscmd') handleEssGitCommand('ess', msg.ip, msg.msg, ws);
       if (msg?.msg_type === 'gitcmd') handleEssGitCommand('git', msg.ip, msg.msg, ws);
