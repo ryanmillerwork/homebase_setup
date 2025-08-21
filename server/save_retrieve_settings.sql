@@ -92,27 +92,17 @@ BEGIN
   END LOOP;
   variant_args_str := rtrim(variant_args_str);
 
-  -- Get param_settings (raw text)
+  -- Get params (already flattened key/value pairs)
   SELECT status_value
-  INTO   ptxt
+  INTO   param_settings_str
   FROM   server_status
   WHERE  host = p_host
      AND status_source = 'ess'
-     AND status_type = 'param_settings';
+     AND status_type = 'params';
 
-  IF ptxt IS NULL THEN
-    RAISE EXCEPTION 'No param_settings for host=%', p_host;
+  IF param_settings_str IS NULL THEN
+    RAISE EXCEPTION 'No params for host=%', p_host;
   END IF;
-
-  -- Simplify param_settings: keep only first value from each { ... }
-  -- Example: "interblock_time {1000 1 int}" -> "interblock_time 1000"
-  param_settings_str :=
-    regexp_replace(
-      ptxt,
-      '\{([^ \}]+)[^}]*\}',  -- capture first token inside braces
-      '\1',
-      'g'
-    );
   param_settings_str := btrim(param_settings_str);
 
     -- Upsert into saved_settings table
