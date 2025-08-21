@@ -1574,7 +1574,11 @@ async function handlePresetLoad(ip: string, clientWs: WebSocket): Promise<void> 
 
     // Build a single script to ensure ordering and a single reply
     const script = `::ess::set_variant_args ${variantArgs}; ::ess::reload_variant; ::ess::set_params ${paramSettings}`;
-    await hb.eval(script, 20000);
+
+    console.log('script: ', script);
+
+
+    // await hb.eval(script, 20000);
 
     clientWs.send(JSON.stringify({ type: 'preset_load_ok', ip }));
   } catch (e) {
