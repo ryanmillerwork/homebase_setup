@@ -12,6 +12,8 @@ DECLARE
   i      int;
   variant_args_str text := '';
   param_settings_str text := '';
+  argval text;            -- current argument value (trimmed)
+  value_token text;       -- token to append (handles empty/whitespace cases)
 
   -- Variables for the additional columns
   v_subject text;
@@ -74,12 +76,19 @@ BEGIN
   END IF;
 
   -- Build variant_args string (without outer braces)
+  -- Rule: if value is empty or NULL, emit '{}'
+  --       if value contains whitespace, wrap as '{ <value> }'
+  --       otherwise emit as-is
   FOR i IN 1..COALESCE(array_length(names,1),0) LOOP
-    IF vals[i] ~ '\s' THEN
-      variant_args_str := variant_args_str || format('%s { %s } ', btrim(names[i]), btrim(vals[i]));
+    argval := btrim(COALESCE(vals[i], ''));
+    IF argval = '' THEN
+      value_token := '{}';
+    ELSIF argval ~ '\s' THEN
+      value_token := format('{ %s }', argval);
     ELSE
-      variant_args_str := variant_args_str || format('%s %s ', btrim(names[i]), btrim(vals[i]));
+      value_token := argval;
     END IF;
+    variant_args_str := variant_args_str || format('%s %s ', btrim(names[i]), value_token);
   END LOOP;
   variant_args_str := rtrim(variant_args_str);
 

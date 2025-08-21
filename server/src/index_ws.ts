@@ -1577,8 +1577,7 @@ async function handlePresetLoad(ip: string, clientWs: WebSocket): Promise<void> 
 
     console.log('script: ', script);
 
-
-    // await hb.eval(script, 20000);
+    await hb.eval(script, 20000);
 
     clientWs.send(JSON.stringify({ type: 'preset_load_ok', ip }));
   } catch (e) {
