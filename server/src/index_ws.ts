@@ -536,7 +536,7 @@ class HomebaseWS {
     // periodic juicer voltage/charging poll every 10s (combined request)
     this.pollJuicerTimer = setInterval(() => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-      const combinedScript = '[set ::ess::current(juicer)] get pump_voltage charging';
+      const combinedScript = 'send ess {[set ::ess::current(juicer)] get pump_voltage charging}';
       this.eval(combinedScript, 5000)
         .then((result) => {
           let voltage: number | null = null;
