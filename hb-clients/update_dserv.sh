@@ -112,4 +112,7 @@ main() {
   sudo systemctl restart dserv
 
   echo "Status:"
-  sudo systemct
+  sudo systemctl status --no-pager dserv
+}
+
+main "$@"
