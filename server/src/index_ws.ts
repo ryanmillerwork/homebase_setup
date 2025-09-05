@@ -90,6 +90,9 @@ const DEFAULT_SUBSCRIBE_EVERY = 1;
 const HOMEBASE_ALLOWED_IPS: string[] = [];
 // Legacy TCP refresh is deprecated and disabled in index_ws.ts
 
+// Feature flag to enable/disable the periodic touch sweep (60s). Temporarily disabled.
+const TOUCH_SWEEP_ENABLED = false;
+
 const app = express();
 const webpage_path = '/var/www/hb-webclient/spa'; // will serve index.html from this dir
 
@@ -526,12 +529,14 @@ class HomebaseWS {
     }, this.heartbeatIntervalMs);
 
     // periodic touch sweep once per minute to refresh possibly stale datapoints
-    this.refreshTimer = setInterval(() => {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-      HOMEBASE_SUBSCRIPTIONS.forEach((m) => {
-        try { this.touch(m); } catch {}
-      });
-    }, 60000);
+    if (TOUCH_SWEEP_ENABLED) {
+      this.refreshTimer = setInterval(() => {
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+        HOMEBASE_SUBSCRIPTIONS.forEach((m) => {
+          try { this.touch(m); } catch {}
+        });
+      }, 60000);
+    }
 
     // periodic juicer voltage/charging poll every 10s (combined request)
     this.pollJuicerTimer = setInterval(() => {
