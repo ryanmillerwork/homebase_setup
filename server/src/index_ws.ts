@@ -538,7 +538,8 @@ class HomebaseWS {
       }, 60000);
     }
 
-    // periodic juicer voltage/charging poll every 10s (combined request)
+    // periodic juicer voltage/charging poll every 10s (combined request) - TEMP DISABLED
+    /*
     this.pollJuicerTimer = setInterval(() => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
       const combinedScript = 'send ess {[set ::ess::current(juicer)] get pump_voltage charging}';
@@ -590,6 +591,7 @@ class HomebaseWS {
         })
         .catch(() => {});
     }, 10000);
+    */
   }
 
   private stopHeartbeat(): void {
