@@ -1580,8 +1580,8 @@ async function handlePresetLoad(ip: string, clientWs: WebSocket): Promise<void> 
     }
 
     // Build a single script to ensure ordering and a single reply
-    const script = `::ess::set_variant_args ${variantArgs}; ::ess::reload_variant; ::ess::set_params ${paramSettings}`;
-    // const script = `send ess {evalNoReply {::ess::set_variant_args ${variantArgs}; ::ess::reload_variant; ::ess::set_params ${paramSettings}}}`;
+    // Use evalNoReply for reload_variant so we don't block on reload completion, but keep set_params in the reply path.
+    const script = `::ess::set_variant_args ${variantArgs}; evalNoReply {::ess::reload_variant}; ::ess::set_params ${paramSettings}`;
 
     console.log('script: ', script);
 
