@@ -81,6 +81,14 @@ const HOMEBASE_SUBSCRIPTIONS = [
   'ess/block_id',
   'ess/warningInfo',
 
+  
+  // Power monitor
+  'powermon/charging',
+  'powermon/pct',
+  'powermon/a',
+  'powermon/v',
+  'powermon/w',
+  
   // Discovery helpers
   '@keys'
 ];
