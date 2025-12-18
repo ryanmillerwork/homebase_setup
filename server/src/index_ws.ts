@@ -225,7 +225,7 @@ async function runSysCmdOverSsh(cmd: SysCmd): Promise<{ ok: boolean; stdout: str
   const remoteCommand =
     cmd.cmd === 'reboot'
       ? 'sudo /usr/bin/systemctl reboot'
-      : `sudo /usr/bin/systemctl restart ${cmd.service}`;
+      : `sudo /usr/bin/systemctl restart ${cmd.service} && sudo /usr/bin/systemctl is-active ${cmd.service}`;
 
   try {
     const { stdout, stderr } = await execFileAsync('sshpass', [...sshArgsBase, remoteCommand], {
@@ -268,8 +268,17 @@ async function handleSysCmdFromWebClient(msg: any, clientWs: WebSocket): Promise
       syscmd = { msg_type: 'syscmd', ip, cmd: 'restart_service', service };
     }
 
+    try {
+      console.log('[syscmd] executing', { ip, cmd: syscmd.cmd, service: (syscmd as any).service });
+    } catch {}
+
     const result = await runSysCmdOverSsh(syscmd);
     if (result.ok) {
+      try {
+        const outPreview = (result.stdout || '').trim().slice(0, 300);
+        const errPreview = (result.stderr || '').trim().slice(0, 300);
+        console.log('[syscmd] ok', { ip, cmd: syscmd.cmd, service: (syscmd as any).service, stdout: outPreview, stderr: errPreview });
+      } catch {}
       clientWs.send(JSON.stringify({ type: 'syscmd_ok', ip, cmd: syscmd.cmd, service: (syscmd as any).service, stdout: result.stdout, stderr: result.stderr }));
     } else {
       try {
