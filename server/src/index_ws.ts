@@ -11,6 +11,9 @@ import ping from 'ping';                            // MIT License
 // import { Socket } from 'net';                       // Deprecated legacy TCP path (removed)
 import path from 'path';
 import express, { Request, Response } from 'express';
+import { promises as fs } from 'fs';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 
 // for webserver
 declare const process: any;
@@ -138,6 +141,157 @@ interface QueryRow {
 }
 
 // type WebSocketResponse = SqlResponse | ErrorResponse;
+
+// -----------------------------
+// syscmd (browser -> server -> device via sshpass)
+// -----------------------------
+
+const execFileAsync = promisify(execFile);
+
+type SshCredentials = { user: string; password: string };
+let cachedSshCreds: { creds: SshCredentials; mtimeMs: number } | null = null;
+const SSH_CREDENTIALS_FILE_CANDIDATES = [
+  // When running directly from TS in server/src
+  path.join(__dirname, 'ssh_credentials.json'),
+  // Fallback when running from a different cwd / compiled output
+  path.join(process.cwd?.() || '.', 'server', 'src', 'ssh_credentials.json')
+];
+
+async function resolveSshCredentialsPath(): Promise<string> {
+  for (const p of SSH_CREDENTIALS_FILE_CANDIDATES) {
+    try {
+      await fs.access(p);
+      return p;
+    } catch {}
+  }
+  // Default to the first candidate for error messages
+  return SSH_CREDENTIALS_FILE_CANDIDATES[0];
+}
+
+type SysCmd =
+  | { msg_type: 'syscmd'; ip: string; cmd: 'reboot' }
+  | { msg_type: 'syscmd'; ip: string; cmd: 'restart_service'; service: string };
+
+function isValidIPv4(ip: string): boolean {
+  if (typeof ip !== 'string') return false;
+  const m = ip.match(/^(\d{1,3}\.){3}\d{1,3}$/);
+  if (!m) return false;
+  const parts = ip.split('.').map((p) => Number(p));
+  return parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255);
+}
+
+function isValidServiceName(service: string): boolean {
+  if (typeof service !== 'string') return false;
+  if (service.length < 1 || service.length > 128) return false;
+  // only allow common systemd unit characters, must end in .service
+  return /^[A-Za-z0-9_.@-]+\.service$/.test(service);
+}
+
+async function readSshCredentials(): Promise<SshCredentials> {
+  const credsPath = await resolveSshCredentialsPath();
+  const stat = await fs.stat(credsPath);
+  if (cachedSshCreds && cachedSshCreds.mtimeMs === stat.mtimeMs) {
+    return cachedSshCreds.creds;
+  }
+  const raw = await fs.readFile(credsPath, 'utf-8');
+  const parsed = JSON.parse(raw);
+  const user = String(parsed?.user || '').trim();
+  const password = String(parsed?.password || '').trim();
+  if (!user || !password) {
+    throw new Error(`Invalid SSH credentials file: ${credsPath}`);
+  }
+  const creds = { user, password };
+  cachedSshCreds = { creds, mtimeMs: stat.mtimeMs };
+  return creds;
+}
+
+async function runSysCmdOverSsh(cmd: SysCmd): Promise<{ ok: boolean; stdout: string; stderr: string; exitCode: number | null }> {
+  const { user, password } = await readSshCredentials();
+
+  const target = `${user}@${cmd.ip}`;
+  const sshArgsBase = [
+    '-p',
+    password,
+    'ssh',
+    '-o',
+    'StrictHostKeyChecking=no',
+    '-o',
+    'UserKnownHostsFile=/dev/null',
+    '-o',
+    'ConnectTimeout=5',
+    target
+  ];
+
+  const remoteCommand =
+    cmd.cmd === 'reboot'
+      ? 'nohup sudo /usr/bin/systemctl reboot >/dev/null 2>&1 &'
+      : `sudo /usr/bin/systemctl restart ${cmd.service}`;
+
+  try {
+    const { stdout, stderr } = await execFileAsync('sshpass', [...sshArgsBase, remoteCommand], {
+      timeout: cmd.cmd === 'reboot' ? 8000 : 15000,
+      maxBuffer: 1024 * 1024
+    });
+    return { ok: true, stdout: stdout ?? '', stderr: stderr ?? '', exitCode: 0 };
+  } catch (e: any) {
+    const stdout = String(e?.stdout ?? '');
+    const stderr = String(e?.stderr ?? '');
+    const exitCode = typeof e?.code === 'number' ? e.code : null;
+    return { ok: false, stdout, stderr, exitCode };
+  }
+}
+
+async function handleSysCmdFromWebClient(msg: any, clientWs: WebSocket): Promise<void> {
+  try {
+    const ip = String(msg?.ip || '').trim();
+    const cmd = String(msg?.cmd || '').trim();
+
+    if (!isValidIPv4(ip)) {
+      clientWs.send(JSON.stringify({ type: 'syscmd_error', ip, cmd, error: 'invalid ip (must be IPv4)' }));
+      return;
+    }
+
+    if (cmd !== 'reboot' && cmd !== 'restart_service') {
+      clientWs.send(JSON.stringify({ type: 'syscmd_error', ip, cmd, error: 'invalid cmd (must be reboot or restart_service)' }));
+      return;
+    }
+
+    let syscmd: SysCmd;
+    if (cmd === 'reboot') {
+      syscmd = { msg_type: 'syscmd', ip, cmd: 'reboot' };
+    } else {
+      const service = String(msg?.service || '').trim();
+      if (!isValidServiceName(service)) {
+        clientWs.send(JSON.stringify({ type: 'syscmd_error', ip, cmd, service, error: 'invalid service name' }));
+        return;
+      }
+      syscmd = { msg_type: 'syscmd', ip, cmd: 'restart_service', service };
+    }
+
+    const result = await runSysCmdOverSsh(syscmd);
+    if (result.ok) {
+      clientWs.send(JSON.stringify({ type: 'syscmd_ok', ip, cmd: syscmd.cmd, service: (syscmd as any).service, stdout: result.stdout, stderr: result.stderr }));
+    } else {
+      clientWs.send(
+        JSON.stringify({
+          type: 'syscmd_error',
+          ip,
+          cmd: syscmd.cmd,
+          service: (syscmd as any).service,
+          error: 'ssh command failed',
+          exitCode: result.exitCode,
+          stdout: result.stdout,
+          stderr: result.stderr
+        })
+      );
+    }
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    try {
+      clientWs.send(JSON.stringify({ type: 'syscmd_error', error: message }));
+    } catch {}
+  }
+}
 
 
 // Handle websocket communication with web clients
@@ -866,6 +1020,11 @@ async function startWebSocketServer() {
         return;
       }
       console.log('Received message from client:', msg);
+      if (msg?.msg_type === 'syscmd') {
+        // Reboot device or restart a systemd service via sshpass (credentials from server/src/ssh_credentials.json)
+        handleSysCmdFromWebClient(msg, ws);
+        return;
+      }
       if (msg?.msg_type === 'esscmd') handleEssGitCommand('ess', msg.ip, msg.msg, ws);
       if (msg?.msg_type === 'gitcmd') handleEssGitCommand('git', msg.ip, msg.msg, ws);
       msg?.msg_type === 'AddDevice' && addDevice(msg.ip, msg.msg); // Forward message to DS on relevant homebase
