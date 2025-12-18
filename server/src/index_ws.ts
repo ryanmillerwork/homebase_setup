@@ -151,9 +151,9 @@ const execFileAsync = promisify(execFile);
 type SshCredentials = { user: string; password: string };
 let cachedSshCreds: { creds: SshCredentials; mtimeMs: number } | null = null;
 const SSH_CREDENTIALS_FILE_CANDIDATES = [
-  // When running directly from TS in server/src
-  path.join(__dirname, 'ssh_credentials.json'),
-  // Fallback when running from a different cwd / compiled output
+  // Typical when started from server/src
+  path.join(process.cwd?.() || '.', 'ssh_credentials.json'),
+  // Typical when started from repo root
   path.join(process.cwd?.() || '.', 'server', 'src', 'ssh_credentials.json')
 ];
 
@@ -224,7 +224,7 @@ async function runSysCmdOverSsh(cmd: SysCmd): Promise<{ ok: boolean; stdout: str
 
   const remoteCommand =
     cmd.cmd === 'reboot'
-      ? 'nohup sudo /usr/bin/systemctl reboot >/dev/null 2>&1 &'
+      ? 'sudo /usr/bin/systemctl reboot'
       : `sudo /usr/bin/systemctl restart ${cmd.service}`;
 
   try {
@@ -272,6 +272,9 @@ async function handleSysCmdFromWebClient(msg: any, clientWs: WebSocket): Promise
     if (result.ok) {
       clientWs.send(JSON.stringify({ type: 'syscmd_ok', ip, cmd: syscmd.cmd, service: (syscmd as any).service, stdout: result.stdout, stderr: result.stderr }));
     } else {
+      try {
+        console.warn('[syscmd] ssh command failed', { ip, cmd: syscmd.cmd, service: (syscmd as any).service, exitCode: result.exitCode, stderr: result.stderr });
+      } catch {}
       clientWs.send(
         JSON.stringify({
           type: 'syscmd_error',
