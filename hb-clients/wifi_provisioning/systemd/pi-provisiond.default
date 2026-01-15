@@ -10,8 +10,11 @@ SETUP_SSID=Pi-Setup
 SETUP_PSK=setup1234
 AP_CON_NAME=SetupAP
 
-# HTTP UI port (binds 0.0.0.0)
-HTTP_PORT=8080
+# Known AP gateway IP (NetworkManager "shared" IPv4)
+AP_IPV4_CIDR=192.168.4.1/24
+
+# HTTP UI port (binds 0.0.0.0). Use 80 to avoid typing a port.
+HTTP_PORT=80
 
 # Route metrics during setup mode (prefer Wi-Fi so captive portal clears on wlan0)
 WIFI_METRIC=100

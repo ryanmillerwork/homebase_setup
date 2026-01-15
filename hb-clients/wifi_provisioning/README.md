@@ -29,7 +29,8 @@ sudo systemctl status pi-provisiond --no-pager
 From your phone:
 
 - Connect to the setup AP SSID (default **Pi-Setup**)
-- Browse to `http://10.42.0.1:8080/` (the gateway IP is usually `10.42.0.1` when NetworkManager uses “shared” IPv4)
+- In most cases, your phone will pop a captive portal “Sign in to Wi‑Fi” page automatically.
+- If not, browse to `http://192.168.4.1/` (default setup gateway IP) — no port needed.
 - Scan → select SSID → connect
 - Tap “Open portal” to accept guest terms
 - Wait for “internet_open=true” and the AP will shut down automatically
@@ -46,7 +47,7 @@ sudo systemctl restart pi-provisiond
 Key settings:
 
 - `SETUP_SSID`, `SETUP_PSK`
-- `HTTP_PORT`
+- `AP_IPV4_CIDR`, `HTTP_PORT`
 - `WLAN_IF`, `AP_IF`
 - `CHECK_URL`, `REQUIRED_SUCCESSES`
 - Route preference during setup: `WIFI_METRIC`, `ETH_METRIC`

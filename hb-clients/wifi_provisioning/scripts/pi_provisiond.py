@@ -57,7 +57,12 @@ class Config:
     setup_psk: str = os.environ.get("SETUP_PSK", "setup1234")
     ap_con_name: str = os.environ.get("AP_CON_NAME", "SetupAP")
 
-    http_port: int = env_int("HTTP_PORT", 8080)
+    # Serve UI on port 80 by default so users don't need to type a port.
+    http_port: int = env_int("HTTP_PORT", 80)
+
+    # Known, stable AP gateway IP/CIDR for "shared" mode (DHCP/NAT).
+    # Common embedded default: 192.168.4.1/24
+    ap_ipv4_cidr: str = os.environ.get("AP_IPV4_CIDR", "192.168.4.1/24")
 
     # Route metrics during setup: prefer Wi-Fi so captive portal clearance happens on wlan0.
     wifi_metric: int = env_int("WIFI_METRIC", 100)
@@ -185,6 +190,10 @@ table ip setupnat {{
     type nat hook prerouting priority -100; policy accept;
     iifname "{cfg.ap_if}" udp dport 53 redirect to :53
     iifname "{cfg.ap_if}" tcp dport 53 redirect to :53
+
+    # Captive-portal friendliness: force all HTTP from setup clients to our local UI.
+    # This makes most phones show a "Sign in to Wi‑Fi" popup automatically.
+    iifname "{cfg.ap_if}" tcp dport 80 redirect to :{cfg.http_port}
   }}
   chain postrouting {{
     type nat hook postrouting priority 100; policy accept;
@@ -255,6 +264,19 @@ def ap_channel_and_band_from_wlan() -> tuple[str, str]:
     return ("bg", ch)
 
 
+def wait_for_nm_device(dev: str, timeout_s: float = 3.0) -> None:
+    """
+    Best-effort wait for NetworkManager to notice a newly created interface.
+    Avoids a race where `nmcli connection up` runs before NM has the device.
+    """
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        out = run(["nmcli", "-t", "-f", "DEVICE", "device", "status"], check=False)
+        if any(line.strip() == dev for line in out.splitlines() if line.strip()):
+            return
+        time.sleep(0.1)
+
+
 def ensure_ap_interface() -> None:
     # We require ap_if to be an AP-capable virtual iface. If an iface already exists
     # with the right name but wrong type (common when a previous attempt created it
@@ -286,6 +308,9 @@ def ensure_ap_interface() -> None:
             "This can be normal until the hotspot is activated; continuing."
         )
 
+    # Give NetworkManager a moment to notice the new interface before binding a connection to it.
+    wait_for_nm_device(cfg.ap_if, timeout_s=3.0)
+
 
 def ensure_ap_connection() -> None:
     # Ensure a known connection name exists in NM for the AP.
@@ -309,27 +334,49 @@ def ensure_ap_connection() -> None:
         )
 
     band, chan = ap_channel_and_band_from_wlan()
-    run(
-        [
-            "nmcli",
-            "connection",
-            "modify",
-            cfg.ap_con_name,
-            "802-11-wireless.mode",
-            "ap",
+
+    base_args = [
+        "nmcli",
+        "connection",
+        "modify",
+        cfg.ap_con_name,
+        "802-11-wireless.mode",
+        "ap",
+        "ipv4.method",
+        "shared",
+        "ipv4.addresses",
+        cfg.ap_ipv4_cidr,
+        "wifi-sec.key-mgmt",
+        "wpa-psk",
+        "wifi-sec.psk",
+        cfg.setup_psk,
+    ]
+
+    # Prefer matching STA band/channel (single-radio friendliness), but fall back if NM rejects it.
+    out = run(
+        base_args
+        + [
             "802-11-wireless.band",
             band,
             "802-11-wireless.channel",
             chan,
-            "ipv4.method",
-            "shared",
-            "wifi-sec.key-mgmt",
-            "wpa-psk",
-            "wifi-sec.psk",
-            cfg.setup_psk,
         ],
-        check=True,
+        check=False,
     )
+    if "failed to modify 802-11-wireless.channel" in out.lower():
+        log(f"WARNING: NM rejected AP channel {chan} (band={band}). Falling back to 2.4GHz ch6.")
+        run(
+            base_args
+            + [
+                "802-11-wireless.band",
+                "bg",
+                "802-11-wireless.channel",
+                "6",
+            ],
+            check=True,
+        )
+    elif out and "error:" in out.lower():
+        raise RuntimeError(f"nmcli modify AP connection failed:\n{out}")
 
 
 def bring_up_ap() -> None:
@@ -493,6 +540,7 @@ def index():
 <body style="font-family: system-ui, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 12px;">
   <h2>Device Wi‑Fi Setup</h2>
   <p><b>Setup AP SSID:</b> {cfg.setup_ssid}</p>
+  <p><b>Setup URL:</b> <a href="/">http://{cfg.ap_ipv4_cidr.split('/')[0]}/</a></p>
   <p><b>Status:</b> <span id="st">loading…</span></p>
 
   <button onclick="scan()">Scan Networks</button>
@@ -554,6 +602,34 @@ def index():
 </body>
 </html>
 """
+
+
+@app.get("/generate_204")
+def android_generate_204():
+    # Android captive portal check. Returning HTML triggers the captive portal UI.
+    return (
+        "<!doctype html><html><body>"
+        "<h3>Setup required</h3>"
+        "<p>Open the setup page:</p>"
+        '<p><a href="/">Continue</a></p>'
+        "</body></html>",
+        200,
+        {"Content-Type": "text/html; charset=utf-8"},
+    )
+
+
+@app.get("/hotspot-detect.html")
+def apple_hotspot_detect():
+    # iOS/macOS captive portal check. Returning HTML triggers the "Sign in" UI.
+    return (
+        "<!doctype html><html><body>"
+        "<h3>Setup required</h3>"
+        "<p>Open the setup page:</p>"
+        '<p><a href="/">Continue</a></p>'
+        "</body></html>",
+        200,
+        {"Content-Type": "text/html; charset=utf-8"},
+    )
 
 
 @app.get("/scan")
