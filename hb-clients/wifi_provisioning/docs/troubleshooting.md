@@ -7,6 +7,8 @@
   - `sudo journalctl -u pi-provisiond -n 100 --no-pager`
 - Confirm the AP interface exists:
   - `iw dev` should show `ap0` (default).
+- Confirm it is actually in **AP mode**:
+  - `iw dev ap0 info` should show `type AP` (or `__ap`)
 - Confirm the AP connection is up:
   - `nmcli connection show --active`
   - You should see `SetupAP` (default `AP_CON_NAME`).
@@ -15,6 +17,7 @@ Common causes:
 
 - **Single-radio limitations / band coupling**: The daemon tries to match the AP band/channel to the STA (`wlan0`). If the STA ends up on **5 GHz**, your AP can become 5 GHz too (your phone must support 5 GHz).
 - **Regulatory domain**: If country/REGDOMAIN is unset, AP behavior can be flaky. Set the correct Wi‑Fi country for your image.
+- **Driver can’t create AP virtual interface while STA is connected**: Some chipsets won’t form `ap0` in AP mode if `wlan0` is already associated. The daemon retries by disconnecting `wlan0` once; if it still fails, you likely need a second Wi‑Fi interface (USB) for a “phone stays connected during provisioning” UX.
 
 ## 2) Phone can connect to Pi-Setup but the UI doesn’t load
 

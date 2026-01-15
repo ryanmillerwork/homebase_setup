@@ -259,8 +259,31 @@ def ensure_ap_interface() -> None:
         else:
             return
 
-    run(["iw", "dev", cfg.wlan_if, "interface", "add", cfg.ap_if, "type", "__ap"], check=True)
-    run(["nmcli", "device", "set", cfg.ap_if, "managed", "yes"], check=False)
+    def _create() -> None:
+        run(["iw", "dev", cfg.wlan_if, "interface", "add", cfg.ap_if, "type", "__ap"], check=True)
+        run(["nmcli", "device", "set", cfg.ap_if, "managed", "yes"], check=False)
+
+    _create()
+
+    # Some drivers/firmware won't actually create an AP-type iface while the STA is
+    # associated. If the created iface still reports as "managed", retry once after
+    # disconnecting Wi-Fi.
+    t_after = iface_type(cfg.ap_if).lower()
+    if t_after and t_after not in ("ap", "__ap"):
+        # Best-effort disconnect: if this device was already connected, we prefer a
+        # working setup AP over maintaining an existing STA connection.
+        run(["nmcli", "device", "disconnect", cfg.wlan_if], check=False)
+        run(["iw", "dev", cfg.ap_if, "del"], check=False)
+        _create()
+
+    t_final = iface_type(cfg.ap_if).lower()
+    if t_final and t_final not in ("ap", "__ap"):
+        raise RuntimeError(
+            f"AP interface '{cfg.ap_if}' failed to become AP-type (iw reports type '{t_final}'). "
+            "This usually means the Wi‑Fi driver/firmware doesn't support AP mode on this phy "
+            "(or not concurrently with STA). Try setting a proper Wi‑Fi country/regdomain and/or "
+            "use a second Wi‑Fi adapter for setup mode."
+        )
 
 
 def ensure_ap_connection() -> None:
