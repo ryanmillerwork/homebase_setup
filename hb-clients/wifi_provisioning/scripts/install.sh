@@ -43,10 +43,27 @@ echo "[pi-provisiond] Copying files into place..."
 
 install -D -m 0755 "${ROOT_DIR}/scripts/pi_provisiond.py" /usr/local/bin/pi_provisiond.py
 
-if [[ -f /etc/default/pi-provisiond ]]; then
-  echo "[pi-provisiond] /etc/default/pi-provisiond already exists; leaving it in place."
-else
-  install -D -m 0644 "${ROOT_DIR}/systemd/pi-provisiond.default" /etc/default/pi-provisiond
+install -D -m 0644 "${ROOT_DIR}/systemd/pi-provisiond.default" /etc/default/pi-provisiond
+
+# Ensure required defaults are present/updated (idempotent-ish)
+ensure_kv() {
+  local key="$1"
+  local val="$2"
+  if grep -qE "^${key}=" /etc/default/pi-provisiond; then
+    sed -i -E "s|^${key}=.*|${key}=${val}|" /etc/default/pi-provisiond
+  else
+    echo "${key}=${val}" >>/etc/default/pi-provisiond
+  fi
+}
+
+# Always force the setup AP to 2.4GHz channel 6 (per project choice).
+ensure_kv "AP_FORCE_BAND" "bg"
+ensure_kv "AP_FORCE_CHANNEL" "6"
+
+# If nginx is present (common on Pi images), keep daemon on :8080 and let nginx own :80.
+if command -v nginx >/dev/null 2>&1; then
+  ensure_kv "HTTP_PORT" "8080"
+  ensure_kv "CAPTIVE_HTTP_PORT" "80"
 fi
 
 install -D -m 0644 "${ROOT_DIR}/systemd/pi-provisiond.service" /etc/systemd/system/pi-provisiond.service

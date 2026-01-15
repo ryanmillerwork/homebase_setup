@@ -19,10 +19,11 @@ HTTP_PORT=8080
 # Captive HTTP port (usually 80). nft redirects captive HTTP here.
 CAPTIVE_HTTP_PORT=80
 
-# Optional: force setup AP to 2.4GHz channel 6 for maximum phone compatibility.
-# (Leave commented if you rely on matching STA channel/band for single-radio devices.)
-# AP_FORCE_BAND=bg
-# AP_FORCE_CHANNEL=6
+# Force setup AP to 2.4GHz channel 6 for maximum phone compatibility.
+# NOTE: This means the AP may drop briefly while the device joins a 5GHz-only STA network
+# on single-radio hardware. For the “phone stays connected” UX in all cases, use a second Wi‑Fi adapter.
+AP_FORCE_BAND=bg
+AP_FORCE_CHANNEL=6
 
 # Route metrics during setup mode (prefer Wi-Fi so captive portal clears on wlan0)
 WIFI_METRIC=100
