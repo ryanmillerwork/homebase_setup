@@ -59,6 +59,17 @@ systemctl daemon-reload
 systemctl enable --now NetworkManager.service || true
 systemctl enable --now pi-provisiond.service
 
+# Optional: nginx captive portal proxy on the AP gateway IP.
+if command -v nginx >/dev/null 2>&1 && [[ -d /etc/nginx ]]; then
+  echo "[pi-provisiond] nginx detected; installing captive-portal proxy config (binds 10.42.0.1:80)..."
+  install -D -m 0644 "${ROOT_DIR}/nginx/pi-provisiond-ap.conf" /etc/nginx/sites-available/pi-provisiond-ap.conf
+  ln -sf /etc/nginx/sites-available/pi-provisiond-ap.conf /etc/nginx/sites-enabled/pi-provisiond-ap.conf
+  nginx -t
+  systemctl restart nginx || true
+else
+  echo "[pi-provisiond] nginx not detected; setup UI will be at http://<ap-gateway>:8080/"
+fi
+
 echo
 echo "[pi-provisiond] Installed."
 echo "  - Check status: sudo systemctl status pi-provisiond --no-pager"

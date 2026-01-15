@@ -57,12 +57,17 @@ class Config:
     setup_psk: str = os.environ.get("SETUP_PSK", "setup1234")
     ap_con_name: str = os.environ.get("AP_CON_NAME", "SetupAP")
 
-    # Serve UI on port 80 by default so users don't need to type a port.
-    http_port: int = env_int("HTTP_PORT", 80)
+    # UI port for the daemon itself. We default to 8080 because many images already
+    # run nginx/lighttpd on :80 (and we can proxy :80 -> :8080 for a friendly UX).
+    http_port: int = env_int("HTTP_PORT", 8080)
 
-    # Known, stable AP gateway IP/CIDR for "shared" mode (DHCP/NAT).
-    # Common embedded default: 192.168.4.1/24
-    ap_ipv4_cidr: str = os.environ.get("AP_IPV4_CIDR", "192.168.4.1/24")
+    # Port that captive clients will be redirected to (usually 80 on the AP gateway).
+    # If nginx is present, it should listen on this port and proxy to HTTP_PORT.
+    captive_http_port: int = env_int("CAPTIVE_HTTP_PORT", 80)
+
+    # "Shared" mode gateway IP is commonly 10.42.0.1 on NetworkManager. Some NM builds
+    # ignore custom addresses in shared mode; treat this as a best-effort preference.
+    ap_ipv4_cidr: str = os.environ.get("AP_IPV4_CIDR", "10.42.0.1/24")
 
     # Route metrics during setup: prefer Wi-Fi so captive portal clearance happens on wlan0.
     wifi_metric: int = env_int("WIFI_METRIC", 100)
@@ -191,9 +196,9 @@ table ip setupnat {{
     iifname "{cfg.ap_if}" udp dport 53 redirect to :53
     iifname "{cfg.ap_if}" tcp dport 53 redirect to :53
 
-    # Captive-portal friendliness: force all HTTP from setup clients to our local UI.
-    # This makes most phones show a "Sign in to Wi‑Fi" popup automatically.
-    iifname "{cfg.ap_if}" tcp dport 80 redirect to :{cfg.http_port}
+    # Captive-portal friendliness: force all HTTP from setup clients to the AP gateway
+    # web server (usually :80). That server can proxy to the daemon.
+    iifname "{cfg.ap_if}" tcp dport 80 redirect to :{cfg.captive_http_port}
   }}
   chain postrouting {{
     type nat hook postrouting priority 100; policy accept;
