@@ -576,6 +576,11 @@ def index():
 
   <hr/>
   <h3>Connect</h3>
+  <p style="color:#444; line-height:1.35">
+    Note: on some single-radio devices, your phone may briefly disconnect from the setup SSID when the device
+    joins the target Wi‑Fi (especially if the target network is 5GHz-only). If that happens, rejoin the setup SSID
+    and reopen this page.
+  </p>
   <label>SSID</label><br/>
   <input id="ssid" style="width:100%"><br/><br/>
   <label>Password (leave blank for open)</label><br/>
@@ -643,30 +648,15 @@ def index():
 
 @app.get("/generate_204")
 def android_generate_204():
-    # Android captive portal check. Returning HTML triggers the captive portal UI.
-    return (
-        "<!doctype html><html><body>"
-        "<h3>Setup required</h3>"
-        "<p>Open the setup page:</p>"
-        '<p><a href="/">Continue</a></p>'
-        "</body></html>",
-        200,
-        {"Content-Type": "text/html; charset=utf-8"},
-    )
+    # Android captive portal check. Redirecting to "/" usually lands the user on our
+    # setup page without an extra click.
+    return ("", 302, {"Location": "/", "Cache-Control": "no-store"})
 
 
 @app.get("/hotspot-detect.html")
 def apple_hotspot_detect():
-    # iOS/macOS captive portal check. Returning HTML triggers the "Sign in" UI.
-    return (
-        "<!doctype html><html><body>"
-        "<h3>Setup required</h3>"
-        "<p>Open the setup page:</p>"
-        '<p><a href="/">Continue</a></p>'
-        "</body></html>",
-        200,
-        {"Content-Type": "text/html; charset=utf-8"},
-    )
+    # iOS/macOS captive portal check. Redirecting to "/" typically opens our setup UI.
+    return ("", 302, {"Location": "/", "Cache-Control": "no-store"})
 
 
 @app.get("/scan")
