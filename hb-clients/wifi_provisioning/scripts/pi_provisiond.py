@@ -22,6 +22,10 @@ from dataclasses import dataclass
 from flask import Flask, jsonify, request
 
 
+def log(msg: str) -> None:
+    print(f"[pi-provisiond] {msg}", flush=True)
+
+
 def env_bool(name: str, default: bool) -> bool:
     v = os.environ.get(name)
     if v is None:
@@ -255,6 +259,7 @@ def ensure_ap_interface() -> None:
         # `iw` usually reports AP ifaces as `AP`. Keep this conservative: if it's not
         # clearly AP-ish, recreate.
         if t and t not in ("ap", "__ap"):
+            log(f"Interface {cfg.ap_if} exists but iw reports type={t}; deleting and recreating as __ap")
             run(["iw", "dev", cfg.ap_if, "del"], check=False)
         else:
             return
@@ -263,6 +268,7 @@ def ensure_ap_interface() -> None:
         run(["iw", "dev", cfg.wlan_if, "interface", "add", cfg.ap_if, "type", "__ap"], check=True)
         run(["nmcli", "device", "set", cfg.ap_if, "managed", "yes"], check=False)
 
+    log(f"Creating AP interface {cfg.ap_if} from {cfg.wlan_if}...")
     _create()
 
     # Some drivers/firmware won't actually create an AP-type iface while the STA is
@@ -270,6 +276,9 @@ def ensure_ap_interface() -> None:
     # disconnecting Wi-Fi.
     t_after = iface_type(cfg.ap_if).lower()
     if t_after and t_after not in ("ap", "__ap"):
+        log(
+            f"After creation, iw reports {cfg.ap_if} type={t_after}; retrying after disconnecting {cfg.wlan_if}"
+        )
         # Best-effort disconnect: if this device was already connected, we prefer a
         # working setup AP over maintaining an existing STA connection.
         run(["nmcli", "device", "disconnect", cfg.wlan_if], check=False)
@@ -332,6 +341,7 @@ def ensure_ap_connection() -> None:
 
 
 def bring_up_ap() -> None:
+    log("Bringing up setup AP via NetworkManager...")
     ensure_ap_interface()
     ensure_ap_connection()
     run(["nmcli", "connection", "up", cfg.ap_con_name], check=True)
@@ -355,6 +365,7 @@ def bring_up_ap() -> None:
             f"AP failed to come up (connection '{cfg.ap_con_name}' on '{cfg.ap_if}').\n{diag}\n"
             "Try: `sudo nmcli connection up SetupAP` manually to see the specific NetworkManager error."
         )
+    log("Setup AP is active.")
 
 
 def bring_down_ap() -> None:
@@ -607,10 +618,12 @@ def bootstrap() -> None:
         )
         os._exit(0)
 
+    log("Bootstrapping setup mode...")
     ensure_ip_forwarding()
     set_route_metrics_setup_mode()
     bring_up_ap()
     apply_setup_nft()
+    log("Setup mode initialized (AP + nftables).")
 
 
 def main() -> None:
