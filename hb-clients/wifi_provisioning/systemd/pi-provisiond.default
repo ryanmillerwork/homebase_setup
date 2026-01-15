@@ -1,0 +1,35 @@
+# /etc/default/pi-provisiond
+# Copied from wifi_connection_helper/systemd/pi-provisiond.default
+
+# Interfaces
+WLAN_IF=wlan0
+AP_IF=ap0
+
+# Setup AP credentials
+SETUP_SSID=Pi-Setup
+SETUP_PSK=setup1234
+AP_CON_NAME=SetupAP
+
+# HTTP UI port (binds 0.0.0.0)
+HTTP_PORT=8080
+
+# Route metrics during setup mode (prefer Wi-Fi so captive portal clears on wlan0)
+WIFI_METRIC=100
+ETH_METRIC=600
+# Optional: set these if auto-detection is wrong in your image
+# ETH_CON_NAME=Wired connection 1
+# WIFI_CON_NAME=Brown-Guest
+
+# Captive / internet check
+CHECK_URL=http://connectivitycheck.gstatic.com/generate_204
+CHECK_INTERVAL=3.0
+REQUIRED_SUCCESSES=3
+
+# Behavior
+AUTO_TEARDOWN=1
+# If set, daemon exits once online (systemd will stop it). Default is keep running.
+EXIT_ON_ONLINE=0
+
+# Optional marker file written when online
+PROVISIONED_MARKER=/var/lib/pi-provisiond/provisioned
+

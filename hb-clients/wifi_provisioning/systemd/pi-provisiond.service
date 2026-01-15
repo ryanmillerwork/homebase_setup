@@ -1,0 +1,22 @@
+[Unit]
+Description=Pi Provisioning (setup AP + captive portal bridge)
+Wants=NetworkManager.service
+After=NetworkManager.service
+
+[Service]
+Type=simple
+EnvironmentFile=-/etc/default/pi-provisiond
+ExecStart=/usr/local/bin/pi_provisiond.py
+Restart=on-failure
+RestartSec=2
+
+# Journald logging
+StandardOutput=journal
+StandardError=journal
+
+# Slightly safer defaults
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+
