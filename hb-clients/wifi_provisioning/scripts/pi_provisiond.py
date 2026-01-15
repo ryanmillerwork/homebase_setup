@@ -441,9 +441,21 @@ def bring_down_ap() -> None:
 
 def scan_wifi() -> list[dict]:
     out = run(
-        ["nmcli", "-t", "-f", "SSID,SECURITY,SIGNAL", "device", "wifi", "list", "ifname", cfg.wlan_if],
-        check=True,
+        [
+            "nmcli",
+            "-t",
+            "-f",
+            "SSID,SECURITY,SIGNAL",
+            "device",
+            "wifi",
+            "list",
+            "ifname",
+            cfg.wlan_if,
+        ],
+        check=False,
     )
+    if out.strip().lower().startswith("error:"):
+        raise RuntimeError(out.strip())
     nets: list[dict] = []
     for line in out.splitlines():
         if not line.strip():
@@ -586,19 +598,28 @@ def index():
         `${{j.mode}} | internet_open=${{j.internet_open}} | streak=${{j.success_streak}} | last_code=${{j.last_internet_check_http_code}}`;
     }}
     async function scan() {{
-      document.getElementById('out').textContent = 'Scanning…';
-      const r = await fetch('/scan');
-      const nets = await r.json();
-      const div = document.getElementById('nets');
-      div.innerHTML = '';
-      for (const n of nets) {{
-        const b = document.createElement('button');
-        b.textContent = `${{n.ssid}}  (${{n.security||'open'}}  ${{n.signal||''}})`;
-        b.style.display='block'; b.style.width='100%'; b.style.marginTop='6px';
-        b.onclick = () => document.getElementById('ssid').value = n.ssid;
-        div.appendChild(b);
+      const outEl = document.getElementById('out');
+      outEl.textContent = 'Scanning… (may take ~10s)';
+      try {{
+        const r = await fetch('/scan', {{ cache: 'no-store' }});
+        const j = await r.json();
+        if (!r.ok) {{
+          throw new Error(j && j.error ? j.error : `scan failed (HTTP ${{r.status}})`);
+        }}
+        const nets = j;
+        const div = document.getElementById('nets');
+        div.innerHTML = '';
+        for (const n of nets) {{
+          const b = document.createElement('button');
+          b.textContent = `${{n.ssid}}  (${{n.security||'open'}}  ${{n.signal||''}})`;
+          b.style.display='block'; b.style.width='100%'; b.style.marginTop='6px';
+          b.onclick = () => document.getElementById('ssid').value = n.ssid;
+          div.appendChild(b);
+        }}
+        outEl.textContent = `Scan complete. Found ${{nets.length}} network(s).`;
+      }} catch (e) {{
+        outEl.textContent = `Scan error: ${{e && e.message ? e.message : e}}`;
       }}
-      document.getElementById('out').textContent = 'Scan complete.';
     }}
     async function connect() {{
       const ssid = document.getElementById('ssid').value;
@@ -650,7 +671,11 @@ def apple_hotspot_detect():
 
 @app.get("/scan")
 def api_scan():
-    return jsonify(scan_wifi())
+    try:
+        return jsonify(scan_wifi())
+    except Exception as e:
+        state["last_error"] = str(e)
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 
 @app.post("/connect")
