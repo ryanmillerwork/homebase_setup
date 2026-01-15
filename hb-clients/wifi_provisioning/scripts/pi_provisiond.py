@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 import pathlib
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
@@ -84,6 +85,10 @@ class Config:
     # To force setup mode (for re-provisioning / debugging), set FORCE_SETUP=1.
     force_setup: bool = env_bool("FORCE_SETUP", False)
     skip_if_provisioned: bool = env_bool("SKIP_IF_PROVISIONED", True)
+
+    # If true, fail startup if the AP interface does not report AP mode after NM activates it.
+    # Some drivers report confusing types; default is warn-only.
+    strict_ap_mode: bool = env_bool("STRICT_AP_MODE", False)
 
 
 cfg = Config()
@@ -271,27 +276,14 @@ def ensure_ap_interface() -> None:
     log(f"Creating AP interface {cfg.ap_if} from {cfg.wlan_if}...")
     _create()
 
-    # Some drivers/firmware won't actually create an AP-type iface while the STA is
-    # associated. If the created iface still reports as "managed", retry once after
-    # disconnecting Wi-Fi.
+    # Note: On many systems the interface type only flips to "AP" once NetworkManager
+    # (wpa_supplicant) activates the hotspot. So we do not hard-fail here if `iw` still
+    # reports "managed". We'll validate (optionally) after NM activation instead.
     t_after = iface_type(cfg.ap_if).lower()
     if t_after and t_after not in ("ap", "__ap"):
         log(
-            f"After creation, iw reports {cfg.ap_if} type={t_after}; retrying after disconnecting {cfg.wlan_if}"
-        )
-        # Best-effort disconnect: if this device was already connected, we prefer a
-        # working setup AP over maintaining an existing STA connection.
-        run(["nmcli", "device", "disconnect", cfg.wlan_if], check=False)
-        run(["iw", "dev", cfg.ap_if, "del"], check=False)
-        _create()
-
-    t_final = iface_type(cfg.ap_if).lower()
-    if t_final and t_final not in ("ap", "__ap"):
-        raise RuntimeError(
-            f"AP interface '{cfg.ap_if}' failed to become AP-type (iw reports type '{t_final}'). "
-            "This usually means the Wi‑Fi driver/firmware doesn't support AP mode on this phy "
-            "(or not concurrently with STA). Try setting a proper Wi‑Fi country/regdomain and/or "
-            "use a second Wi‑Fi adapter for setup mode."
+            f"After creating {cfg.ap_if}, iw reports type={t_after}. "
+            "This can be normal until the hotspot is activated; continuing."
         )
 
 
@@ -345,6 +337,18 @@ def bring_up_ap() -> None:
     ensure_ap_interface()
     ensure_ap_connection()
     run(["nmcli", "connection", "up", cfg.ap_con_name], check=True)
+
+    # After activation, confirm interface mode and warn if it's not AP.
+    t = iface_type(cfg.ap_if).lower()
+    if t and t not in ("ap", "__ap"):
+        msg = (
+            f"Hotspot connection is up, but iw reports {cfg.ap_if} type={t}. "
+            "If your phone can't see the SSID, the driver likely can't do AP mode (or AP+STA). "
+            "Try using a USB Wi‑Fi adapter for the setup AP."
+        )
+        if cfg.strict_ap_mode:
+            raise RuntimeError(msg)
+        log("WARNING: " + msg)
 
     # Validate AP came up (helps catch driver/capability issues early with a clear error).
     active = run(["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"], check=False)
@@ -612,11 +616,12 @@ def bootstrap() -> None:
     if cfg.skip_if_provisioned and not cfg.force_setup and is_provisioned():
         state["mode"] = "online"
         state["internet_open"] = True
-        print(
-            f"[pi-provisiond] Provisioned marker found at {cfg.provisioned_marker}; "
-            "skipping setup AP. (Set FORCE_SETUP=1 or delete the marker to re-enter setup.)"
+        log(
+            f"Provisioned marker found at {cfg.provisioned_marker}; skipping setup AP. "
+            "(Set FORCE_SETUP=1 or delete the marker to re-enter setup.)"
         )
-        os._exit(0)
+        # Use a normal exit so stdout is flushed to journald.
+        sys.exit(0)
 
     log("Bootstrapping setup mode...")
     ensure_ip_forwarding()
