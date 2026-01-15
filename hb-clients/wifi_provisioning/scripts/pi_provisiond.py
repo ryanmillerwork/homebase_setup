@@ -76,6 +76,11 @@ class Config:
         "PROVISIONED_MARKER", "/var/lib/pi-provisiond/provisioned"
     )
 
+    # Shipping default: once provisioned, don't bring up the setup AP again.
+    # To force setup mode (for re-provisioning / debugging), set FORCE_SETUP=1.
+    force_setup: bool = env_bool("FORCE_SETUP", False)
+    skip_if_provisioned: bool = env_bool("SKIP_IF_PROVISIONED", True)
+
 
 cfg = Config()
 app = Flask(__name__)
@@ -111,6 +116,24 @@ def run_sh(cmd: str, check: bool = True) -> str:
 def iface_exists(ifname: str) -> bool:
     out = run(["iw", "dev"], check=False)
     return f"Interface {ifname}" in out
+
+
+def iface_type(ifname: str) -> str:
+    """
+    Best-effort parse of `iw dev` to return the interface type (e.g. managed, AP, __ap).
+    Returns empty string if unknown/not found.
+    """
+    out = run(["iw", "dev"], check=False)
+    lines = out.splitlines()
+    for i, line in enumerate(lines):
+        if line.strip() == f"Interface {ifname}":
+            # look ahead a few lines for the `type ...` stanza
+            for j in range(i + 1, min(i + 12, len(lines))):
+                s = lines[j].strip()
+                if s.startswith("type "):
+                    return s.split(" ", 1)[1].strip()
+            return ""
+    return ""
 
 
 def nm_active_con_for_device(dev: str) -> str:
@@ -224,8 +247,18 @@ def ap_channel_and_band_from_wlan() -> tuple[str, str]:
 
 
 def ensure_ap_interface() -> None:
+    # We require ap_if to be an AP-capable virtual iface. If an iface already exists
+    # with the right name but wrong type (common when a previous attempt created it
+    # incorrectly), delete and recreate it.
     if iface_exists(cfg.ap_if):
-        return
+        t = iface_type(cfg.ap_if).lower()
+        # `iw` usually reports AP ifaces as `AP`. Keep this conservative: if it's not
+        # clearly AP-ish, recreate.
+        if t and t not in ("ap", "__ap"):
+            run(["iw", "dev", cfg.ap_if, "del"], check=False)
+        else:
+            return
+
     run(["iw", "dev", cfg.wlan_if, "interface", "add", cfg.ap_if, "type", "__ap"], check=True)
     run(["nmcli", "device", "set", cfg.ap_if, "managed", "yes"], check=False)
 
@@ -279,6 +312,26 @@ def bring_up_ap() -> None:
     ensure_ap_interface()
     ensure_ap_connection()
     run(["nmcli", "connection", "up", cfg.ap_con_name], check=True)
+
+    # Validate AP came up (helps catch driver/capability issues early with a clear error).
+    active = run(["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"], check=False)
+    if f"{cfg.ap_con_name}:{cfg.ap_if}" not in active:
+        diag = "\n".join(
+            [
+                "=== nmcli device status ===",
+                run(["nmcli", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"], check=False).strip(),
+                "=== nmcli active connections ===",
+                active.strip(),
+                "=== iw dev ===",
+                run(["iw", "dev"], check=False).strip(),
+                "=== ip -4 addr ap_if ===",
+                run(["ip", "-4", "addr", "show", cfg.ap_if], check=False).strip(),
+            ]
+        )
+        raise RuntimeError(
+            f"AP failed to come up (connection '{cfg.ap_con_name}' on '{cfg.ap_if}').\n{diag}\n"
+            "Try: `sudo nmcli connection up SetupAP` manually to see the specific NetworkManager error."
+        )
 
 
 def bring_down_ap() -> None:
@@ -354,6 +407,13 @@ def write_provisioned_marker() -> None:
         p.write_text(f"online_at={int(time.time())}\n", encoding="utf-8")
     except Exception:
         pass
+
+
+def is_provisioned() -> bool:
+    try:
+        return pathlib.Path(cfg.provisioned_marker).exists()
+    except Exception:
+        return False
 
 
 def monitor_loop() -> None:
@@ -513,6 +573,17 @@ def api_status():
 
 
 def bootstrap() -> None:
+    # If we've already provisioned successfully in the past, don't re-enter setup mode
+    # (unless explicitly forced). This prevents the AP from flapping on every boot.
+    if cfg.skip_if_provisioned and not cfg.force_setup and is_provisioned():
+        state["mode"] = "online"
+        state["internet_open"] = True
+        print(
+            f"[pi-provisiond] Provisioned marker found at {cfg.provisioned_marker}; "
+            "skipping setup AP. (Set FORCE_SETUP=1 or delete the marker to re-enter setup.)"
+        )
+        os._exit(0)
+
     ensure_ip_forwarding()
     set_route_metrics_setup_mode()
     bring_up_ap()
