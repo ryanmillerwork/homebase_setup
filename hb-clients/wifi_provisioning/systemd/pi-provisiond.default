@@ -7,7 +7,8 @@ AP_IF=ap0
 
 # Setup AP credentials
 SETUP_SSID=Pi-Setup
-SETUP_PSK=setup1234
+# Leave blank for an open setup AP (no password). Set to enable WPA-PSK.
+SETUP_PSK=
 AP_CON_NAME=SetupAP
 
 # Known AP gateway IP (NetworkManager "shared" IPv4). Many NM builds still use 10.42.0.1.

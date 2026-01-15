@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Convenience command: stop Wi-Fi provisioning (remove runtime override).
+#
+# Installed to /usr/local/bin/wifi_provision_stop by scripts/install.sh
+
+if [[ $EUID -ne 0 ]]; then
+  exec sudo /usr/local/bin/pi-provisiond-reprovision stop
+fi
+
+exec /usr/local/bin/pi-provisiond-reprovision stop
+

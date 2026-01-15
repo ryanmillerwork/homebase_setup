@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Convenience command: enter Wi-Fi provisioning (setup AP) mode.
+#
+# Installed to /usr/local/bin/wifi_provision by scripts/install.sh
+
+if [[ $EUID -ne 0 ]]; then
+  exec sudo /usr/local/bin/pi-provisiond-reprovision start
+fi
+
+exec /usr/local/bin/pi-provisiond-reprovision start
+

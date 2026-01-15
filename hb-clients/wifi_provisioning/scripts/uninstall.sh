@@ -22,6 +22,9 @@ systemctl disable --now pi-provisiond.service 2>/dev/null || true
 
 echo "[pi-provisiond] Removing files..."
 rm -f /usr/local/bin/pi_provisiond.py
+rm -f /usr/local/bin/pi-provisiond-reprovision
+rm -f /usr/local/bin/wifi_provision
+rm -f /usr/local/bin/wifi_provision_stop
 rm -f /etc/systemd/system/pi-provisiond.service
 
 if [[ "${REMOVE_DEFAULT}" == "1" ]]; then

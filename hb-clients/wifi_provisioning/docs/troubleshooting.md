@@ -15,16 +15,25 @@
 
 Common causes:
 
-- **Single-radio limitations / band coupling**: The daemon tries to match the AP band/channel to the STA (`wlan0`). If the STA ends up on **5 GHz**, your AP can become 5 GHz too (your phone must support 5 GHz).
+- **Single-radio limitations / band coupling**: even if AP mode works, the AP may flap/disconnect when the device connects to the target Wi‑Fi. For a “phone stays connected” UX, use a second Wi‑Fi interface (USB) for the setup AP.
 - **Regulatory domain**: If country/REGDOMAIN is unset, AP behavior can be flaky. Set the correct Wi‑Fi country for your image.
-- **Driver can’t create AP virtual interface while STA is connected**: Some chipsets won’t form `ap0` in AP mode if `wlan0` is already associated. The daemon retries by disconnecting `wlan0` once; if it still fails, you likely need a second Wi‑Fi interface (USB) for a “phone stays connected during provisioning” UX.
+- **Driver can’t create AP virtual interface while STA is connected**: Some chipsets won’t form `ap0` in AP mode if `wlan0` is already associated. The daemon retries once by disconnecting/downing `wlan0`; if it still fails, you likely need a second Wi‑Fi interface (USB) (or accept a “no AP+STA concurrency” flow).
 
 ## 2) Phone can connect to Pi-Setup but the UI doesn’t load
 
 - NetworkManager “shared” mode usually uses `10.42.0.1` as the gateway, but confirm:
   - `ip -4 addr show ap0`
-- Then browse to:
-  - `http://<AP_IP>:8080/` (default port `HTTP_PORT=8080`)
+- Then browse to one of:
+  - `http://10.42.0.1/` (preferred if nginx proxy is installed)
+  - `http://10.42.0.1:8080/` (daemon direct)
+
+If you see **502 Bad Gateway** at `http://10.42.0.1/`, nginx is up but the daemon isn’t listening:
+
+- Check daemon:
+  - `sudo systemctl status pi-provisiond --no-pager -l`
+  - `sudo journalctl -u pi-provisiond -n 120 --no-pager`
+- Confirm ports:
+  - `sudo ss -ltnp | egrep ':(80|8080)\\b' || true`
 
 ## 3) Captive portal never “clears”
 
@@ -51,4 +60,30 @@ If Ethernet is plugged in, ensure Wi‑Fi is still preferred during setup:
   - Expect `table inet setup` and `table ip setupnat` while in setup mode.
 
 If you already have a firewall, ensure it doesn’t block forwarding between `ap0` and `wlan0`.
+
+## 5) The setup SSID disappears right after it appears
+
+This usually means the device is already online and setup mode is being torn down.
+
+- Check if the device is already connected:
+  - `nmcli -f NAME,TYPE,DEVICE,STATE connection show --active`
+- Check for the provisioned marker:
+  - `sudo ls -l /var/lib/pi-provisiond/provisioned || true`
+
+To re-enter setup:
+
+- `sudo rm -f /var/lib/pi-provisiond/provisioned`
+- Optionally set `FORCE_SETUP=1` and `AUTO_TEARDOWN=0` in `/etc/default/pi-provisiond` for repeated testing.
+
+If the device is already online and you want to re-provision without the AP immediately tearing down:
+
+- `wifi_provision`
+
+## 6) “Scan Networks” does nothing / errors
+
+The UI now reports scan errors in-page. On the Pi you can also test:
+
+- `curl -sS http://127.0.0.1:8080/scan`
+
+If it returns `status=error`, the message is usually an `nmcli`/NetworkManager issue (Wi‑Fi blocked, interface name mismatch, etc.).
 

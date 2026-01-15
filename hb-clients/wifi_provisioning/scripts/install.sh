@@ -42,6 +42,9 @@ fi
 echo "[pi-provisiond] Copying files into place..."
 
 install -D -m 0755 "${ROOT_DIR}/scripts/pi_provisiond.py" /usr/local/bin/pi_provisiond.py
+install -D -m 0755 "${ROOT_DIR}/scripts/reprovision.sh" /usr/local/bin/pi-provisiond-reprovision
+install -D -m 0755 "${ROOT_DIR}/scripts/wifi_provision" /usr/local/bin/wifi_provision
+install -D -m 0755 "${ROOT_DIR}/scripts/wifi_provision_stop" /usr/local/bin/wifi_provision_stop
 
 install -D -m 0644 "${ROOT_DIR}/systemd/pi-provisiond.default" /etc/default/pi-provisiond
 

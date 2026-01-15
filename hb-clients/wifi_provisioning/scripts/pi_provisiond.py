@@ -54,7 +54,8 @@ class Config:
     ap_if: str = os.environ.get("AP_IF", "ap0")
 
     setup_ssid: str = os.environ.get("SETUP_SSID", "Pi-Setup")
-    setup_psk: str = os.environ.get("SETUP_PSK", "setup1234")
+    # If empty, the setup AP is open (no password).
+    setup_psk: str = os.environ.get("SETUP_PSK", "")
     ap_con_name: str = os.environ.get("AP_CON_NAME", "SetupAP")
 
     # UI port for the daemon itself. We default to 8080 because many images already
@@ -107,6 +108,11 @@ class Config:
     # Some drivers report confusing types; default is warn-only.
     strict_ap_mode: bool = env_bool("STRICT_AP_MODE", False)
 
+    # If true, do not start the "internet open" 204-check until after the user hits /connect.
+    # This prevents the setup AP from immediately tearing down on devices that are already online
+    # when you intentionally re-enter setup mode.
+    arm_check_on_connect: bool = env_bool("ARM_CHECK_ON_CONNECT", False)
+
 
 cfg = Config()
 app = Flask(__name__)
@@ -117,6 +123,7 @@ state = {
     "internet_open": False,
     "success_streak": 0,
     "last_internet_check_http_code": "",
+    "check_armed": True,
 }
 
 
@@ -308,7 +315,21 @@ def ensure_ap_interface() -> None:
         run(["nmcli", "device", "set", cfg.ap_if, "managed", "yes"], check=False)
 
     log(f"Creating AP interface {cfg.ap_if} from {cfg.wlan_if}...")
-    _create()
+    try:
+        _create()
+    except Exception as e:
+        # Some drivers refuse to create a virtual AP interface while the STA is
+        # associated. Retry once after disconnecting/downing the STA interface.
+        log(
+            f"Failed to create AP interface {cfg.ap_if} from {cfg.wlan_if}: {e}\n"
+            f"Retrying once after disconnecting {cfg.wlan_if}..."
+        )
+        run(["nmcli", "device", "disconnect", cfg.wlan_if], check=False)
+        run(["ip", "link", "set", cfg.wlan_if, "down"], check=False)
+        time.sleep(0.5)
+        run(["ip", "link", "set", cfg.wlan_if, "up"], check=False)
+        time.sleep(0.5)
+        _create()
 
     # Note: On many systems the interface type only flips to "AP" once NetworkManager
     # (wpa_supplicant) activates the hotspot. So we do not hard-fail here if `iw` still
@@ -326,8 +347,48 @@ def ensure_ap_interface() -> None:
 
 def ensure_ap_connection() -> None:
     # Ensure a known connection name exists in NM for the AP.
+    #
+    # Important: on some systems a stale profile with the same name can exist but be
+    # bound to the wrong interface (e.g. eth0). In that case `nmcli connection up`
+    # will fail with "No suitable device found ... mismatching interface name".
     out = run(["nmcli", "-t", "-f", "NAME", "connection", "show"], check=True)
-    if cfg.ap_con_name not in out.splitlines():
+    have = cfg.ap_con_name in out.splitlines()
+    if have:
+        con_type = run(
+            ["nmcli", "-g", "connection.type", "connection", "show", cfg.ap_con_name],
+            check=False,
+        ).strip()
+        con_if = run(
+            ["nmcli", "-g", "connection.interface-name", "connection", "show", cfg.ap_con_name],
+            check=False,
+        ).strip()
+
+        # If the name exists but it's not a Wi-Fi profile, delete and recreate.
+        if con_type and con_type != "802-11-wireless":
+            log(
+                f"Connection '{cfg.ap_con_name}' exists but has type={con_type}; deleting and recreating as Wi‑Fi AP."
+            )
+            run(["nmcli", "connection", "delete", cfg.ap_con_name], check=False)
+            have = False
+        else:
+            # Force binding to the AP interface (fixes stale profiles bound to eth0, etc.).
+            if con_if != cfg.ap_if:
+                log(
+                    f"Connection '{cfg.ap_con_name}' is bound to interface '{con_if or '(none)'}'; rebinding to '{cfg.ap_if}'."
+                )
+                run(
+                    [
+                        "nmcli",
+                        "connection",
+                        "modify",
+                        cfg.ap_con_name,
+                        "connection.interface-name",
+                        cfg.ap_if,
+                    ],
+                    check=False,
+                )
+
+    if not have:
         run(
             [
                 "nmcli",
@@ -362,11 +423,24 @@ def ensure_ap_connection() -> None:
         "shared",
         "ipv4.addresses",
         cfg.ap_ipv4_cidr,
-        "wifi-sec.key-mgmt",
-        "wpa-psk",
-        "wifi-sec.psk",
-        cfg.setup_psk,
     ]
+
+    # Security: open AP if SETUP_PSK is empty; otherwise WPA-PSK.
+    if cfg.setup_psk:
+        base_args += [
+            "wifi-sec.key-mgmt",
+            "wpa-psk",
+            "wifi-sec.psk",
+            cfg.setup_psk,
+        ]
+    else:
+        # Clear any previous security settings on this connection.
+        base_args += [
+            "wifi-sec.key-mgmt",
+            "none",
+            "wifi-sec.psk",
+            "",
+        ]
 
     # Prefer matching STA band/channel (single-radio friendliness), but fall back if NM rejects it.
     out = run(
@@ -533,6 +607,13 @@ def monitor_loop() -> None:
     state["mode"] = "setup"
     while True:
         try:
+            if not state.get("check_armed", True):
+                state["internet_open"] = False
+                state["last_internet_check_http_code"] = ""
+                state["success_streak"] = 0
+                time.sleep(cfg.check_interval_s)
+                continue
+
             ok, code = check_internet_open()
             state["internet_open"] = ok
             state["last_internet_check_http_code"] = code
@@ -680,6 +761,9 @@ def api_connect():
         state["mode"] = "provisioning"
         out = connect_wifi(ssid, password)
 
+        # Once the user explicitly connects, arm the 204-check so we can detect portal clearance.
+        state["check_armed"] = True
+
         # After connecting, re-tune AP channel/band to match STA, then bounce AP.
         ensure_ap_connection()
         run(["nmcli", "connection", "down", cfg.ap_con_name], check=False)
@@ -731,6 +815,7 @@ def bootstrap() -> None:
         sys.exit(0)
 
     log("Bootstrapping setup mode...")
+    state["check_armed"] = not cfg.arm_check_on_connect
     ensure_ip_forwarding()
     set_route_metrics_setup_mode()
     bring_up_ap()

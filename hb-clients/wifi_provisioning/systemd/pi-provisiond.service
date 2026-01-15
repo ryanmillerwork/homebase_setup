@@ -6,6 +6,8 @@ After=NetworkManager.service
 [Service]
 Type=simple
 EnvironmentFile=-/etc/default/pi-provisiond
+# Optional runtime overrides (written by scripts/reprovision.sh)
+EnvironmentFile=-/run/pi-provisiond.override
 ExecStart=/usr/local/bin/pi_provisiond.py
 Restart=on-failure
 RestartSec=2
