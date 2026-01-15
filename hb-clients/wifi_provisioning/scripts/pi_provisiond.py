@@ -69,6 +69,13 @@ class Config:
     # ignore custom addresses in shared mode; treat this as a best-effort preference.
     ap_ipv4_cidr: str = os.environ.get("AP_IPV4_CIDR", "10.42.0.1/24")
 
+    # Optional: force AP band/channel for maximum phone compatibility.
+    # Examples:
+    #   AP_FORCE_BAND=bg
+    #   AP_FORCE_CHANNEL=6
+    ap_force_band: str = os.environ.get("AP_FORCE_BAND", "").strip()
+    ap_force_channel: str = os.environ.get("AP_FORCE_CHANNEL", "").strip()
+
     # Route metrics during setup: prefer Wi-Fi so captive portal clearance happens on wlan0.
     wifi_metric: int = env_int("WIFI_METRIC", 100)
     eth_metric: int = env_int("ETH_METRIC", 600)
@@ -338,7 +345,11 @@ def ensure_ap_connection() -> None:
             check=True,
         )
 
-    band, chan = ap_channel_and_band_from_wlan()
+    if cfg.ap_force_band and cfg.ap_force_channel:
+        band, chan = (cfg.ap_force_band, cfg.ap_force_channel)
+        log(f"Forcing AP band/channel to {band}/{chan}")
+    else:
+        band, chan = ap_channel_and_band_from_wlan()
 
     base_args = [
         "nmcli",
