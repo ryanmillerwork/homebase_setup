@@ -30,7 +30,7 @@ From your phone:
 
 - Connect to the setup AP SSID (default **Pi-Setup**)
 - In most cases, your phone will pop a captive portal “Sign in to Wi‑Fi” page automatically and land on the setup UI.
-- If not, browse to `http://10.42.0.1/` (common NetworkManager shared-mode gateway)
+- If not, browse to `http://10.42.0.1/` (if nginx proxy is installed) or `http://10.42.0.1:8080/` (daemon direct)
 - Scan → select SSID → connect
 - Tap “Open portal” to accept guest terms
 - Wait for “internet_open=true” and the AP will shut down automatically

@@ -67,6 +67,12 @@ ensure_kv "AP_FORCE_CHANNEL" "6"
 if command -v nginx >/dev/null 2>&1; then
   ensure_kv "HTTP_PORT" "8080"
   ensure_kv "CAPTIVE_HTTP_PORT" "80"
+else
+  # Without nginx, send captive HTTP directly to the daemon.
+  # Source the env file to pick up any user overrides of HTTP_PORT.
+  # shellcheck disable=SC1091
+  source /etc/default/pi-provisiond || true
+  ensure_kv "CAPTIVE_HTTP_PORT" "${HTTP_PORT:-8080}"
 fi
 
 install -D -m 0644 "${ROOT_DIR}/systemd/pi-provisiond.service" /etc/systemd/system/pi-provisiond.service
