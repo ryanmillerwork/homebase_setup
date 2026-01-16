@@ -16,6 +16,10 @@ LOG_PREFIX=""
 DEBUG="${HB_DEBUG:-0}"
 REQUIRE_WIFI_INTERNET="${HB_REQUIRE_WIFI_INTERNET:-0}"
 
+# Used by EXIT trap for cleanup (must not be local vars, because traps can run after scope exits).
+HB_BOOT_MNT=""
+HB_ROOT_MNT=""
+
 die() {
   if [[ -n "$LOG_PREFIX" ]]; then
     echo "$LOG_PREFIX ERROR: $*" >&2
@@ -631,7 +635,8 @@ write_headless_config() {
 
     # Sanitize filename (keep it simple).
     local nm_file
-    nm_file="$(echo "$wifi_ssid" | tr -cd 'A-Za-z0-9._- ' | sed 's/  */ /g' | sed 's/ /_/g')"
+    # Use C locale to avoid tr range issues; keep '-' at the end of the set.
+    nm_file="$(echo "$wifi_ssid" | LC_ALL=C tr -cd 'A-Za-z0-9._ -' | sed 's/  */ /g' | sed 's/ /_/g')"
     [[ -n "$nm_file" ]] || nm_file="wifi"
     nm_file="${nm_dir}/${nm_file}.nmconnection"
 
@@ -692,8 +697,12 @@ cleanup_mounts() {
   local root_mnt="$2"
 
   sync || true
-  umount "$boot_mnt" 2>/dev/null || true
-  umount "$root_mnt" 2>/dev/null || true
+  if [[ -n "${boot_mnt:-}" ]]; then
+    umount "$boot_mnt" 2>/dev/null || true
+  fi
+  if [[ -n "${root_mnt:-}" ]]; then
+    umount "$root_mnt" 2>/dev/null || true
+  fi
 }
 
 set_eeprom_boot_to_nvme() {
@@ -796,10 +805,10 @@ main() {
   log "NVMe boot partition: $boot_part"
   log "NVMe root partition: $root_part"
 
-  local boot_mnt="/mnt/hb_nvme_boot"
-  local root_mnt="/mnt/hb_nvme_root"
-  trap 'cleanup_mounts "$boot_mnt" "$root_mnt"' EXIT
-  mount_nvme_partitions_for_config "$boot_part" "$root_part" "$boot_mnt" "$root_mnt"
+  HB_BOOT_MNT="/mnt/hb_nvme_boot"
+  HB_ROOT_MNT="/mnt/hb_nvme_root"
+  trap 'cleanup_mounts "${HB_BOOT_MNT:-}" "${HB_ROOT_MNT:-}"' EXIT
+  mount_nvme_partitions_for_config "$boot_part" "$root_part" "$HB_BOOT_MNT" "$HB_ROOT_MNT"
 
   local username password
   {
@@ -807,9 +816,9 @@ main() {
     read -r password
   } < <(prompt_username_password)
 
-  write_headless_config "$boot_mnt" "$root_mnt" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname"
+  write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname"
 
-  cleanup_mounts "$boot_mnt" "$root_mnt"
+  cleanup_mounts "$HB_BOOT_MNT" "$HB_ROOT_MNT"
   trap - EXIT
 
   set_eeprom_boot_to_nvme
