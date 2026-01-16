@@ -85,41 +85,41 @@ check_bookworm_or_later() {
 
 have_internet() {
   # Best-effort connectivity check without requiring curl/ping.
-  # Tries TCP connect to a public IP (Cloudflare DNS).
+  # Tries TCP connect to a public IP over HTTPS port (more likely to be permitted than raw DNS).
   if have_cmd timeout; then
-    timeout 3 bash -c 'cat < /dev/null > /dev/tcp/1.1.1.1/53' >/dev/null 2>&1 && return 0
+    timeout 3 bash -c 'cat < /dev/null > /dev/tcp/1.1.1.1/443' >/dev/null 2>&1 && return 0
   else
-    bash -c 'cat < /dev/null > /dev/tcp/1.1.1.1/53' >/dev/null 2>&1 && return 0
+    bash -c 'cat < /dev/null > /dev/tcp/1.1.1.1/443' >/dev/null 2>&1 && return 0
   fi
   return 1
 }
 
 have_internet_via_iface() {
-  # Verifies internet reachability over a specific interface by temporarily pinning a /32 route
-  # to the test IP via that interface, then using the same TCP test as have_internet().
+  # Verifies internet reachability over a specific interface by binding the socket to that interface.
+  # This avoids false positives when ethernet is the default route.
   local iface="$1"
   [[ -n "$iface" ]] || return 1
-  have_cmd ip || return 1
 
-  local old_route=""
-  old_route="$(ip route show 1.1.1.1/32 2>/dev/null | head -n1 || true)"
-
-  # Force traffic to 1.1.1.1 via the desired interface.
-  ip route replace 1.1.1.1/32 dev "$iface" metric 0 >/dev/null 2>&1 || return 1
-
-  local ok=1
-  if have_internet; then
-    ok=0
+  # Preferred: python3 socket with SO_BINDTODEVICE (we're root).
+  if have_cmd python3; then
+    python3 - <<PY >/dev/null 2>&1
+import socket
+iface = ${iface!r}.encode() + b"\\0"
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(3)
+s.setsockopt(socket.SOL_SOCKET, 25, iface)  # SO_BINDTODEVICE = 25
+s.connect(("1.1.1.1", 443))
+s.close()
+PY
+    return $?
   fi
 
-  # Restore prior state.
-  if [[ -n "$old_route" ]]; then
-    ip route replace $old_route >/dev/null 2>&1 || true
-  else
-    ip route del 1.1.1.1/32 >/dev/null 2>&1 || true
+  # Fallback: ping bound to interface (requires iputils-ping).
+  if have_cmd ping; then
+    ping -I "$iface" -c 1 -W 3 1.1.1.1 >/dev/null 2>&1 && return 0
   fi
 
-  return "$ok"
+  return 1
 }
 
 default_route_iface() {
