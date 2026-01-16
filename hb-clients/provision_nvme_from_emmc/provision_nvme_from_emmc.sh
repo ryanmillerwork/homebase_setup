@@ -13,9 +13,6 @@ set -euo pipefail
 # - Reboot
 
 LOG_PREFIX=""
-DEBUG="${HB_DEBUG:-0}"
-REQUIRE_WIFI_INTERNET="${HB_REQUIRE_WIFI_INTERNET:-0}"
-WIFI_COUNTRY="${HB_WIFI_COUNTRY:-}"
 
 # Used by EXIT trap for cleanup (must not be local vars, because traps can run after scope exits).
 HB_BOOT_MNT=""
@@ -36,15 +33,6 @@ log() {
     echo "$LOG_PREFIX $*" >&2
   else
     echo "$*" >&2
-  fi
-}
-
-debug() {
-  [[ "$DEBUG" == "1" ]] || return 0
-  if [[ -n "$LOG_PREFIX" ]]; then
-    echo "$LOG_PREFIX DEBUG: $*" >&2
-  else
-    echo "DEBUG: $*" >&2
   fi
 }
 
@@ -259,7 +247,7 @@ connect_wifi_current() {
   # Verify that *these* credentials work by proving we can reach the internet over Wi-Fi,
   # even if the system's default route prefers ethernet.
   if wait_for_ipv4 "$iface" 60; then
-    debug "Wi-Fi iface '$iface' has an IPv4 address."
+    :
   else
     die "Wi-Fi connected to '$ssid' on '$iface' but no IPv4 address was acquired within 60s (DHCP may have failed)."
   fi
@@ -267,11 +255,7 @@ connect_wifi_current() {
   if have_internet_via_iface "$iface"; then
     log "Wi-Fi connected to '$ssid' and internet is reachable via Wi-Fi."
   else
-    if [[ "$REQUIRE_WIFI_INTERNET" == "1" ]]; then
-      die "Wi-Fi connected to '$ssid' on '$iface' but internet is not reachable via Wi-Fi."
-    fi
     log "WARNING: Wi-Fi connected to '$ssid' but internet probe via Wi-Fi failed (captive portal/firewall?). Continuing anyway."
-    log "         To require Wi-Fi internet reachability, re-run with HB_REQUIRE_WIFI_INTERNET=1"
   fi
 }
 
@@ -326,31 +310,12 @@ check_root_on_emmc_and_nvme_present() {
   # Heuristic: eMMC devices expose /dev/mmcblkXboot0; microSD typically does not.
   if ! compgen -G "/dev/mmcblk*boot0" >/dev/null; then
     log "WARNING: Could not find /dev/mmcblk*boot0; this may be microSD rather than eMMC."
-    log "If you're sure this is OK, re-run with HB_ALLOW_NON_EMMC=1"
-    [[ "${HB_ALLOW_NON_EMMC:-0}" == "1" ]] || die "Aborting due to non-eMMC heuristic."
+    local ans
+    read -r -p "Proceed anyway? Type YES to continue: " ans
+    [[ "$ans" == "YES" ]] || die "Aborting due to non-eMMC heuristic."
   fi
 
   if ! lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}' | grep -q '^nvme'; then
-    if [[ "$DEBUG" == "1" ]]; then
-      debug "NVMe disk not detected (expected /dev/nvme*)."
-      debug "Common causes on Pi 5: PCIe disabled in config, adapter power/seat, or missing EEPROM/firmware support."
-      if [[ -f /boot/firmware/config.txt ]]; then
-        if ! grep -qE '^\s*dtparam=pciex1(=on)?\s*$' /boot/firmware/config.txt; then
-          debug "Hint: add this to /boot/firmware/config.txt and reboot, then re-run:"
-          debug "  dtparam=pciex1=on"
-        fi
-      fi
-      if have_cmd lspci; then
-        debug "Diagnostics: lspci (trimmed)"
-        lspci -nn 2>/dev/null | sed -n '1,80p' >&2 || true
-      else
-        debug "Diagnostics: 'lspci' not found (install 'pciutils' to inspect PCIe)."
-      fi
-      if have_cmd dmesg; then
-        debug "Diagnostics: dmesg (pcie/nvme lines)"
-        dmesg 2>/dev/null | grep -Ei 'pcie|nvme' | tail -n 80 >&2 || true
-      fi
-    fi
     die "No NVMe disk detected (expected /dev/nvme*)."
   fi
 }
@@ -577,14 +542,7 @@ prompt_hostname() {
 
 prompt_wifi_country() {
   # Two-letter ISO 3166-1 alpha-2 country code, e.g. US, GB, DE.
-  local cc="${WIFI_COUNTRY}"
-  if [[ -n "$cc" ]]; then
-    cc="${cc^^}"
-    [[ "$cc" =~ ^[A-Z]{2}$ ]] || die "HB_WIFI_COUNTRY must be a 2-letter country code (e.g. US). Got '$WIFI_COUNTRY'"
-    echo "$cc"
-    return 0
-  fi
-
+  local cc
   read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP): " cc
   cc="${cc^^}"
   [[ "$cc" =~ ^[A-Z]{2}$ ]] || die "Invalid country code '$cc' (expected 2 letters like US)."
@@ -929,5 +887,5 @@ main() {
   reboot
 }
 
-main "$@"
+main
 

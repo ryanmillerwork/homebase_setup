@@ -38,9 +38,5 @@ You will be prompted to:
 ## Notes / caveats
 
 - This script is **destructive** to the selected NVMe disk.
-- “Running on eMMC” is checked via `mmcblk*` root device **plus** a heuristic for `/dev/mmcblk*boot0`. If you really are on microSD and want to proceed, set:
-
-```bash
-sudo HB_ALLOW_NON_EMMC=1 ./provision_nvme_from_emmc.sh
-```
+- “Running on eMMC” is checked via `mmcblk*` root device **plus** a heuristic for `/dev/mmcblk*boot0`. If you really are on microSD, the script will ask you to **type `YES`** to proceed.
 
