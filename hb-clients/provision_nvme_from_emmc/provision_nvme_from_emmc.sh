@@ -328,7 +328,21 @@ prompt_hostname() {
 wifi_scan_ssids() {
   local ssids=""
   if command -v nmcli >/dev/null 2>&1; then
-    ssids="$(nmcli -t -f SSID dev wifi list 2>/dev/null | sed '/^$/d' | sort -u || true)"
+    # Try hard to get a scan result. This is safe even if Wi‑Fi is already up.
+    if command -v rfkill >/dev/null 2>&1; then
+      rfkill unblock wifi >/dev/null 2>&1 || true
+    fi
+    nmcli radio wifi on >/dev/null 2>&1 || true
+    nmcli dev wifi rescan >/dev/null 2>&1 || true
+    sleep 2
+    # --rescan yes is supported on many nmcli versions; ignore if unsupported.
+    ssids="$(
+      nmcli -t -f SSID dev wifi list --rescan yes 2>/dev/null \
+        | sed '/^$/d' \
+        | sort -u \
+        || nmcli -t -f SSID dev wifi list 2>/dev/null | sed '/^$/d' | sort -u \
+        || true
+    )"
   fi
   if [[ -z "$ssids" ]] && command -v iw >/dev/null 2>&1; then
     # Best-effort scan; pick the first wireless interface name.
@@ -343,6 +357,7 @@ wifi_scan_ssids() {
 
 prompt_wifi() {
   local ssids ssid pass choice
+  log "Scanning for Wi‑Fi SSIDs..."
   ssids="$(wifi_scan_ssids)"
 
   if [[ -n "$ssids" ]]; then
@@ -366,6 +381,11 @@ prompt_wifi() {
     fi
   else
     log "WARNING: Could not scan Wi‑Fi SSIDs (no scan results)."
+    if command -v nmcli >/dev/null 2>&1; then
+      log "nmcli diagnostics:"
+      nmcli -t -f WIFI g 2>/dev/null || true
+      nmcli -t -f DEVICE,TYPE,STATE dev status 2>/dev/null || true
+    fi
     read -r -p "Enter Wi‑Fi SSID to use (leave blank to skip Wi‑Fi): " ssid
     if [[ -z "$ssid" ]]; then
       echo ""
