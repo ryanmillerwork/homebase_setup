@@ -191,6 +191,21 @@ iface_has_ipv4() {
   ip -4 addr show dev "$iface" 2>/dev/null | grep -qE '^\s*inet\s+'
 }
 
+wait_for_ipv4() {
+  local iface="$1"
+  local timeout_s="${2:-45}"
+  local waited=0
+
+  while [[ "$waited" -lt "$timeout_s" ]]; do
+    if iface_has_ipv4 "$iface"; then
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
 connect_wifi_current() {
   local ssid="$1"
   local pass="$2"
@@ -238,10 +253,10 @@ connect_wifi_current() {
 
   # Verify that *these* credentials work by proving we can reach the internet over Wi-Fi,
   # even if the system's default route prefers ethernet.
-  if iface_has_ipv4 "$iface"; then
+  if wait_for_ipv4 "$iface" 60; then
     debug "Wi-Fi iface '$iface' has an IPv4 address."
   else
-    die "Wi-Fi connected to '$ssid' on '$iface' but no IPv4 address was acquired (DHCP may have failed)."
+    die "Wi-Fi connected to '$ssid' on '$iface' but no IPv4 address was acquired within 60s (DHCP may have failed)."
   fi
 
   if have_internet_via_iface "$iface"; then
