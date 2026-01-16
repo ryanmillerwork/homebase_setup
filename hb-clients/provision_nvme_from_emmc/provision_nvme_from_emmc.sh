@@ -401,8 +401,66 @@ install_packages() {
 download_image_xz() {
   local out_xz="$1"
   local url="https://downloads.raspberrypi.org/raspios_lite_arm64_latest"
+  local meta="${out_xz}.meta"
+
+  remote_meta() {
+    # Returns 3 lines: etag, last-modified, length
+    wget -S --spider --max-redirect=20 "$url" 2>&1 | awk '
+      BEGIN{etag=""; lm=""; len=""}
+      {
+        # Trim leading spaces for easier matching
+        line=$0
+        sub(/^[[:space:]]+/, "", line)
+        if (tolower(substr(line,1,5))=="etag:") {
+          sub(/^ETag:[[:space:]]*/, "", line)
+          etag=line
+        } else if (tolower(substr(line,1,14))=="last-modified:") {
+          sub(/^Last-Modified:[[:space:]]*/, "", line)
+          lm=line
+        } else if (tolower(substr(line,1,7))=="length:") {
+          # "Length: 12345 (..)"
+          n=split(line, a, /[[:space:]]+/)
+          if (n>=2) len=a[2]
+        }
+      }
+      END{
+        print etag
+        print lm
+        print len
+      }'
+  }
+
+  if [[ -f "$out_xz" && -f "$meta" ]]; then
+    local old_etag old_lm old_len
+    old_etag="$(sed -n '1p' "$meta" 2>/dev/null || true)"
+    old_lm="$(sed -n '2p' "$meta" 2>/dev/null || true)"
+    old_len="$(sed -n '3p' "$meta" 2>/dev/null || true)"
+
+    local new_etag new_lm new_len
+    {
+      read -r new_etag
+      read -r new_lm
+      read -r new_len
+    } < <(remote_meta || true)
+
+    local local_len=""
+    if command -v stat >/dev/null 2>&1; then
+      local_len="$(stat -c%s "$out_xz" 2>/dev/null || true)"
+    fi
+
+    if [[ -n "$new_len" && -n "$old_len" && "$new_len" == "$old_len" && "$local_len" == "$new_len" ]] \
+      && [[ -n "$new_etag" && -n "$old_etag" && "$new_etag" == "$old_etag" ]] \
+      && [[ -n "$new_lm" && -n "$old_lm" && "$new_lm" == "$old_lm" ]]; then
+      log "Local image is already the latest (ETag/Last-Modified/Length match). Skipping download."
+      return 0
+    fi
+  fi
+
   log "Downloading latest Raspberry Pi OS Lite arm64 image (.xz) from $url ..."
   wget -O "$out_xz" "$url"
+
+  # Save fresh metadata for next run (best-effort).
+  remote_meta > "$meta" 2>/dev/null || true
 }
 
 unmount_device_partitions() {
