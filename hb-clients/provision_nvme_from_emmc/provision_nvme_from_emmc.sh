@@ -102,12 +102,21 @@ have_internet_via_iface() {
 
   # Preferred: python3 socket with SO_BINDTODEVICE (we're root).
   if have_cmd python3; then
-    python3 - <<PY >/dev/null 2>&1
+    IFACE="$iface" python3 - <<'PY' >/dev/null 2>&1
+import os
 import socket
-iface = ${iface!r}.encode() + b"\\0"
+
+iface = os.environ.get("IFACE", "")
+if not iface:
+    raise SystemExit(2)
+
+opt = iface.encode("utf-8", errors="strict")
+if not opt.endswith(b"\0"):
+    opt += b"\0"
+
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.settimeout(3)
-s.setsockopt(socket.SOL_SOCKET, 25, iface)  # SO_BINDTODEVICE = 25
+s.setsockopt(socket.SOL_SOCKET, 25, opt)  # SO_BINDTODEVICE = 25
 s.connect(("1.1.1.1", 443))
 s.close()
 PY
