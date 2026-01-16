@@ -22,7 +22,6 @@ Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while bo
 Copy the script to the Pi and run:
 
 ```bash
-chmod +x ./provision_nvme_from_emmc.sh
 sudo ./provision_nvme_from_emmc.sh
 ```
 
@@ -40,3 +39,18 @@ You will be prompted to:
 - This script is **destructive** to the selected NVMe disk.
 - “Running on eMMC” is checked via `mmcblk*` root device **plus** a heuristic for `/dev/mmcblk*boot0`. If you really are on microSD, the script will ask you to **type `YES`** to proceed.
 
+## eMMC fallback provisioning
+
+`provision_emmc_for_nvme_fallback.sh` installs the **desktop** Raspberry Pi OS image to eMMC and prepares it to auto-run NVMe provisioning on every boot. It:
+
+- downloads `raspios_arm64_latest` and flashes it to eMMC
+- creates the default `provision/provision` user
+- enables passwordless sudo for that user
+- clones `https://github.com/ryanmillerwork/homebase_setup` onto the eMMC image
+- sets desktop autostart to run `sudo ./provision_nvme_from_emmc.sh` in a terminal on every boot
+
+Run it from **NVMe or microSD** (it refuses to overwrite the current root device):
+
+```bash
+sudo ./provision_emmc_for_nvme_fallback.sh
+```
