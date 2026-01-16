@@ -638,8 +638,7 @@ prompt_wifi() {
     return 0
   fi
   [[ "$ssid" != *$'\n'* && "$ssid" != *$'\r'* ]] || die "SSID contains newline characters; refusing."
-  read -r -s -p "Enter Wi-Fi password for '$ssid': " pass
-  echo >&2
+  read -r -p "Enter Wi-Fi password for '$ssid' (shown): " pass
   [[ -n "$pass" ]] || die "Empty Wi-Fi password not allowed."
   [[ "$pass" != *$'\n'* && "$pass" != *$'\r'* ]] || die "Wi-Fi password contains newline characters; refusing."
   echo "$ssid"
@@ -862,21 +861,45 @@ main() {
   # Always prompt for Wi-Fi first, then verify internet before we do any installs/downloads.
   local wifi_ssid="" wifi_pass=""
   log "Starting Wi-Fi selection (needed for downloads unless you already have internet via ethernet)."
+
+  local wifi_country
+  wifi_country="$(prompt_wifi_country)"
+
   {
     read -r wifi_ssid
     read -r wifi_pass
   } < <(prompt_wifi)
 
-  local wifi_country
-  wifi_country="$(prompt_wifi_country)"
-
-  # If user skipped Wi-Fi, require that internet is already working (e.g. ethernet).
-  if [[ -n "$wifi_ssid" ]]; then
-    if ! connect_wifi_current "$wifi_ssid" "$wifi_pass"; then
-      local ans=""
-      read -r -p "Wi-Fi connection failed. Continue anyway? [y/N]: " ans
-      [[ "$ans" == "y" || "$ans" == "Y" ]] || die "Aborting due to Wi-Fi connection failure."
+  local max_wifi_attempts=3
+  local attempt=1
+  local wifi_connected="no"
+  while [[ "$attempt" -le "$max_wifi_attempts" ]]; do
+    # If user skipped Wi-Fi, stop trying.
+    if [[ -z "$wifi_ssid" ]]; then
+      break
     fi
+
+    # On retries, keep SSID and re-prompt password (visible) for easier touchscreen entry.
+    if [[ "$attempt" -gt 1 ]]; then
+      read -r -p "Re-enter Wi-Fi password for '$wifi_ssid' (shown): " wifi_pass
+      [[ -n "$wifi_pass" ]] || { log "Empty Wi-Fi password not allowed."; continue; }
+    fi
+
+    if connect_wifi_current "$wifi_ssid" "$wifi_pass"; then
+      wifi_connected="yes"
+      break
+    fi
+
+    if [[ "$attempt" -lt "$max_wifi_attempts" ]]; then
+      log "Wi-Fi connection failed. Try again ($((max_wifi_attempts - attempt)) attempts remaining)."
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  if [[ -n "$wifi_ssid" && "$wifi_connected" != "yes" ]]; then
+    local ans=""
+    read -r -p "Wi-Fi connection failed. Continue anyway? [y/N]: " ans
+    [[ "$ans" == "y" || "$ans" == "Y" ]] || die "Aborting due to Wi-Fi connection failure."
   fi
   if ! have_internet; then
     local ans=""
