@@ -342,15 +342,38 @@ wifi_scan_ssids() {
 }
 
 prompt_wifi() {
-  local ssids ssid pass
+  local ssids ssid pass choice
   ssids="$(wifi_scan_ssids)"
+
   if [[ -n "$ssids" ]]; then
-    log "Available Wi-Fi SSIDs detected from the current system:"
-    echo "$ssids" | sed 's/^/  - /'
+    log "Discovered Wi‑Fi SSIDs from the current system:"
+    mapfile -t _ssids_list < <(printf '%s\n' "$ssids")
+    local i
+    for i in "${!_ssids_list[@]}"; do
+      printf '  [%d] %s\n' "$i" "${_ssids_list[$i]}"
+    done
+    echo
+    read -r -p "Select Wi‑Fi by number, or type an SSID (leave blank to skip Wi‑Fi): " choice
+    if [[ -z "$choice" ]]; then
+      echo ""
+      echo ""
+      return 0
+    fi
+    if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 0 && "$choice" -lt "${#_ssids_list[@]}" ]]; then
+      ssid="${_ssids_list[$choice]}"
+    else
+      ssid="$choice"
+    fi
   else
-    log "WARNING: Could not scan Wi-Fi SSIDs (no scan results). You can still type one manually."
+    log "WARNING: Could not scan Wi‑Fi SSIDs (no scan results)."
+    read -r -p "Enter Wi‑Fi SSID to use (leave blank to skip Wi‑Fi): " ssid
+    if [[ -z "$ssid" ]]; then
+      echo ""
+      echo ""
+      return 0
+    fi
   fi
-  read -r -p "Enter Wi‑Fi SSID to use (leave blank to skip Wi‑Fi): " ssid
+
   if [[ -z "$ssid" ]]; then
     echo ""
     echo ""

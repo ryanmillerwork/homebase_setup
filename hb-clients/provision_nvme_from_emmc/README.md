@@ -22,6 +22,7 @@ Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while bo
 Copy the script to the Pi and run:
 
 ```bash
+chmod +x ./provision_nvme_from_emmc.sh
 sudo ./provision_nvme_from_emmc.sh
 ```
 
