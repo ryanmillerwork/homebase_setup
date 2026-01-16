@@ -12,22 +12,34 @@ set -euo pipefail
 # - Configure EEPROM boot order to prefer NVMe
 # - Reboot
 
-LOG_PREFIX="[provision-nvme]"
+LOG_PREFIX=""
 DEBUG="${HB_DEBUG:-0}"
 
 die() {
-  echo "$LOG_PREFIX ERROR: $*" >&2
+  if [[ -n "$LOG_PREFIX" ]]; then
+    echo "$LOG_PREFIX ERROR: $*" >&2
+  else
+    echo "ERROR: $*" >&2
+  fi
   exit 1
 }
 
 log() {
   # Logs go to stderr so functions that "return data" via stdout can be safely captured.
-  echo "$LOG_PREFIX $*" >&2
+  if [[ -n "$LOG_PREFIX" ]]; then
+    echo "$LOG_PREFIX $*" >&2
+  else
+    echo "$*" >&2
+  fi
 }
 
 debug() {
   [[ "$DEBUG" == "1" ]] || return 0
-  echo "$LOG_PREFIX DEBUG: $*" >&2
+  if [[ -n "$LOG_PREFIX" ]]; then
+    echo "$LOG_PREFIX DEBUG: $*" >&2
+  else
+    echo "DEBUG: $*" >&2
+  fi
 }
 
 need_cmd() {
@@ -93,21 +105,21 @@ connect_wifi_current() {
 
   have_cmd nmcli || die "nmcli not found. On Bookworm it should exist; install NetworkManager or connect networking manually, then re-run."
 
-  log "Attempting to connect current system to Wi‑Fi via NetworkManager (nmcli)..."
+  log "Attempting to connect current system to Wi-Fi via NetworkManager (nmcli)..."
   nmcli radio wifi on >/dev/null 2>&1 || true
   nmcli dev wifi rescan >/dev/null 2>&1 || true
 
   # Try to connect. If this SSID is already configured, nmcli may not need the password.
   if ! nmcli -w 30 dev wifi connect "$ssid" password "$pass" >/dev/null 2>&1; then
     # Fallback attempt without password (in case it's already saved / open network / enterprise not supported here).
-    nmcli -w 30 dev wifi connect "$ssid" >/dev/null 2>&1 || die "Failed to connect to Wi‑Fi SSID '$ssid' using nmcli."
+    nmcli -w 30 dev wifi connect "$ssid" >/dev/null 2>&1 || die "Failed to connect to Wi-Fi SSID '$ssid' using nmcli."
   fi
 
   if nmcli_connected; then
-    log "Wi‑Fi connected."
+    log "Wi-Fi connected."
     return 0
   fi
-  die "Wi‑Fi connection did not reach connected state."
+  die "Wi-Fi connection did not reach connected state."
 }
 
 root_source() {
@@ -337,7 +349,7 @@ prompt_username_password() {
   read -r -p "Enter username to create on the NVMe OS: " username
   [[ "$username" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "Invalid username '$username'"
   read -r -s -p "Enter password for '$username': " password
-  echo
+  echo >&2
   [[ -n "$password" ]] || die "Empty password not allowed."
   echo "$username"
   echo "$password"
@@ -384,18 +396,18 @@ wifi_scan_ssids() {
 
 prompt_wifi() {
   local ssids ssid pass choice
-  log "Scanning for Wi‑Fi SSIDs..."
+  log "Scanning for Wi-Fi SSIDs..."
   ssids="$(wifi_scan_ssids)"
 
   if [[ -n "$ssids" ]]; then
-    log "Discovered Wi‑Fi SSIDs from the current system:"
+    log "Discovered Wi-Fi SSIDs from the current system:"
     mapfile -t _ssids_list < <(printf '%s\n' "$ssids")
     local i
     for i in "${!_ssids_list[@]}"; do
       printf '  [%d] %s\n' "$i" "${_ssids_list[$i]}" >&2
     done
     echo >&2
-    read -r -p "Select Wi‑Fi by number, or type an SSID (leave blank to skip Wi‑Fi): " choice
+    read -r -p "Select Wi-Fi by number, or type an SSID (leave blank to skip Wi-Fi): " choice
     if [[ -z "$choice" ]]; then
       echo ""
       echo ""
@@ -407,13 +419,13 @@ prompt_wifi() {
       ssid="$choice"
     fi
   else
-    log "WARNING: Could not scan Wi‑Fi SSIDs (no scan results)."
+    log "WARNING: Could not scan Wi-Fi SSIDs (no scan results)."
     if command -v nmcli >/dev/null 2>&1; then
       log "nmcli diagnostics:"
       nmcli -t -f WIFI g 2>/dev/null >&2 || true
       nmcli -t -f DEVICE,TYPE,STATE dev status 2>/dev/null >&2 || true
     fi
-    read -r -p "Enter Wi‑Fi SSID to use (leave blank to skip Wi‑Fi): " ssid
+    read -r -p "Enter Wi-Fi SSID to use (leave blank to skip Wi-Fi): " ssid
     if [[ -z "$ssid" ]]; then
       echo ""
       echo ""
@@ -427,8 +439,8 @@ prompt_wifi() {
     return 0
   fi
   [[ "$ssid" != *$'\n'* && "$ssid" != *$'\r'* ]] || die "SSID contains newline characters; refusing."
-  read -r -s -p "Enter Wi‑Fi password for '$ssid': " pass
-  echo
+  read -r -s -p "Enter Wi-Fi password for '$ssid': " pass
+  echo >&2
   [[ -n "$pass" ]] || die "Empty Wi-Fi password not allowed."
   [[ "$pass" != *$'\n'* && "$pass" != *$'\r'* ]] || die "Wi-Fi password contains newline characters; refusing."
   echo "$ssid"
@@ -588,19 +600,19 @@ main() {
   need_cmd grep
   need_cmd sed
 
-  # Always prompt for Wi‑Fi first, then verify internet before we do any installs/downloads.
+  # Always prompt for Wi-Fi first, then verify internet before we do any installs/downloads.
   local wifi_ssid="" wifi_pass=""
-  log "Starting Wi‑Fi selection (needed for downloads unless you already have internet via ethernet)."
+  log "Starting Wi-Fi selection (needed for downloads unless you already have internet via ethernet)."
   {
     read -r wifi_ssid
     read -r wifi_pass
   } < <(prompt_wifi)
 
-  # If user skipped Wi‑Fi, require that internet is already working (e.g. ethernet).
+  # If user skipped Wi-Fi, require that internet is already working (e.g. ethernet).
   if [[ -n "$wifi_ssid" ]]; then
     connect_wifi_current "$wifi_ssid" "$wifi_pass"
   fi
-  have_internet || die "No internet connectivity. Provide Wi‑Fi credentials (or connect ethernet) and re-run."
+  have_internet || die "No internet connectivity. Provide Wi-Fi credentials (or connect ethernet) and re-run."
   log "Internet connectivity verified."
 
   check_bookworm_or_later
