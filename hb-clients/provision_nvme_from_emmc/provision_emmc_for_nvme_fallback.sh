@@ -575,20 +575,20 @@ write_emmc_config() {
   elif [[ -f "${boot_mnt}/firmware/cmdline.txt" ]]; then
     cmdline_rotate="${boot_mnt}/firmware/cmdline.txt"
   fi
-  if [[ -n "$cmdline_rotate" ]]; then
-    local rotate_choice="${HB_ROTATE_180:-}"
-    if [[ -z "$rotate_choice" ]]; then
-      local ans=""
-      read -r -p "Rotate display 180 degrees at 1280x800? [y/N]: " ans
-      [[ "$ans" == "y" || "$ans" == "Y" ]] && rotate_choice="yes" || rotate_choice="no"
-    fi
-    if [[ "$rotate_choice" == "yes" ]]; then
+  local rotate_choice="${HB_ROTATE_180:-}"
+  if [[ -z "$rotate_choice" ]]; then
+    local ans=""
+    read -r -p "Rotate display 180 degrees at 1280x800? [y/N]: " ans
+    [[ "$ans" == "y" || "$ans" == "Y" ]] && rotate_choice="yes" || rotate_choice="no"
+  fi
+  if [[ "$rotate_choice" == "yes" ]]; then
+    if [[ -n "$cmdline_rotate" ]]; then
       if ! grep -qE '(^|[[:space:]])video=HDMI-A-1:.*rotate=180([[:space:]]|$)' "$cmdline_rotate"; then
         sed -i -e "1 s/$/ video=HDMI-A-1:1280x800M@60,rotate=180/" "$cmdline_rotate"
       fi
+    else
+      log "WARNING: Could not find cmdline.txt on boot partition to set display rotation."
     fi
-  else
-    log "WARNING: Could not find cmdline.txt on boot partition to set display rotation."
   fi
 
   # Ensure PCIe is enabled so NVMe is visible when booted from eMMC.
@@ -638,6 +638,14 @@ EOF
   # Ensure script is executable and ownership is correct.
   chmod +x "${repo_dir}/hb-clients/provision_nvme_from_emmc/provision_nvme_from_emmc.sh" || true
   chown -R 1000:1000 "$home_dir"
+
+  if [[ "$rotate_choice" == "yes" ]]; then
+    # Rotate touchscreen input 180 degrees for the known controller (eGalax 0eef:c002).
+    mkdir -p "${root_mnt}/etc/udev/rules.d"
+    cat > "${root_mnt}/etc/udev/rules.d/99-touchscreen-rotate.rules" <<'EOF'
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="0eef", ATTRS{idProduct}=="c002", ENV{LIBINPUT_CALIBRATION_MATRIX}="-1 0 1 0 -1 1"
+EOF
+  fi
 }
 
 main() {

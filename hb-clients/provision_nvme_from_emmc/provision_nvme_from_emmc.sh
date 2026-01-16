@@ -761,6 +761,12 @@ EOF
     chown root:root "$nm_file"
   fi
 
+  # Propagate touchscreen rotation udev rule from the current system if present.
+  if [[ -f /etc/udev/rules.d/99-touchscreen-rotate.rules ]]; then
+    mkdir -p "${root_mnt}/etc/udev/rules.d"
+    cp /etc/udev/rules.d/99-touchscreen-rotate.rules "${root_mnt}/etc/udev/rules.d/99-touchscreen-rotate.rules"
+  fi
+
   # Hostname for the installed system.
   if [[ -n "$hostname" ]]; then
     echo "$hostname" > "${root_mnt}/etc/hostname"
