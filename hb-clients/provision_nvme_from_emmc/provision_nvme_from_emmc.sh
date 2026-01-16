@@ -153,7 +153,8 @@ default_route_iface() {
 
 nmcli_connected() {
   have_cmd nmcli || return 1
-  nmcli -t -f STATE g 2>/dev/null | grep -q '^connected$'
+  # Accept "connected", "connected (site only)", etc.
+  nmcli -t -f STATE g 2>/dev/null | grep -q '^connected'
 }
 
 wifi_iface() {
@@ -203,7 +204,10 @@ connect_wifi_current() {
   local ssid="$1"
   local pass="$2"
 
-  have_cmd nmcli || die "nmcli not found. On Bookworm it should exist; install NetworkManager or connect networking manually, then re-run."
+  if ! have_cmd nmcli; then
+    log "ERROR: nmcli not found. Install NetworkManager or connect networking manually, then re-run."
+    return 1
+  fi
 
   log "Attempting to connect current system to Wi-Fi via NetworkManager (nmcli)..."
   nmcli radio wifi on >/dev/null 2>&1 || true
@@ -215,7 +219,10 @@ connect_wifi_current() {
     # pick any wifi device if not already connected
     iface="$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | awk -F: '$2=="wifi"{print $1; exit}')"
   fi
-  [[ -n "$iface" ]] || die "No Wi-Fi interface found (nmcli shows no wifi devices)."
+  if [[ -z "$iface" ]]; then
+    log "ERROR: No Wi-Fi interface found (nmcli shows no wifi devices)."
+    return 1
+  fi
 
   # Create a temp connection that uses exactly the provided password, so we don't accidentally
   # reuse a previously-saved profile with different credentials.
@@ -226,30 +233,37 @@ connect_wifi_current() {
   # Disconnect iface first to avoid "already activating" edge cases.
   nmcli -w 5 dev disconnect "$iface" >/dev/null 2>&1 || true
 
-  nmcli -w 30 con add type wifi ifname "$iface" con-name "$con_name" ssid "$ssid" >/dev/null 2>&1 \
-    || die "Failed to create temporary Wi-Fi connection for SSID '$ssid'."
-  nmcli -w 30 con modify "$con_name" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$pass" >/dev/null 2>&1 \
-    || die "Failed to apply Wi-Fi password for SSID '$ssid' (nmcli rejected it)."
-  nmcli -w 60 con up "$con_name" ifname "$iface" >/dev/null 2>&1 \
-    || die "Failed to connect to Wi-Fi SSID '$ssid' (auth may have failed)."
+  if ! nmcli -w 30 con add type wifi ifname "$iface" con-name "$con_name" ssid "$ssid" >/dev/null 2>&1; then
+    log "ERROR: Failed to create temporary Wi-Fi connection for SSID '$ssid'."
+    return 1
+  fi
+  if ! nmcli -w 30 con modify "$con_name" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$pass" >/dev/null 2>&1; then
+    log "ERROR: Failed to apply Wi-Fi password for SSID '$ssid' (nmcli rejected it)."
+    return 1
+  fi
+  if ! nmcli -w 60 con up "$con_name" ifname "$iface" >/dev/null 2>&1; then
+    log "ERROR: Failed to connect to Wi-Fi SSID '$ssid' (auth may have failed)."
+    return 1
+  fi
 
   # Verify we really connected to the requested SSID.
   local got_ssid
   got_ssid="$(connected_wifi_ssid)"
   if [[ "$got_ssid" != "$ssid" ]]; then
-    die "Connected Wi-Fi SSID mismatch. Expected '$ssid', got '${got_ssid:-<none>}'"
+    log "ERROR: Connected Wi-Fi SSID mismatch. Expected '$ssid', got '${got_ssid:-<none>}'"
+    return 1
   fi
 
   if ! nmcli_connected; then
-    die "NetworkManager did not reach connected state after Wi-Fi connect."
+    log "ERROR: NetworkManager did not reach connected state after Wi-Fi connect."
+    return 1
   fi
 
   # Verify that *these* credentials work by proving we can reach the internet over Wi-Fi,
   # even if the system's default route prefers ethernet.
-  if wait_for_ipv4 "$iface" 60; then
-    :
-  else
-    die "Wi-Fi connected to '$ssid' on '$iface' but no IPv4 address was acquired within 60s (DHCP may have failed)."
+  if ! wait_for_ipv4 "$iface" 60; then
+    log "ERROR: Wi-Fi connected to '$ssid' on '$iface' but no IPv4 address was acquired within 60s (DHCP may have failed)."
+    return 1
   fi
 
   if have_internet_via_iface "$iface"; then
@@ -826,10 +840,16 @@ main() {
 
   # If user skipped Wi-Fi, require that internet is already working (e.g. ethernet).
   if [[ -n "$wifi_ssid" ]]; then
-    connect_wifi_current "$wifi_ssid" "$wifi_pass"
+    if ! connect_wifi_current "$wifi_ssid" "$wifi_pass"; then
+      local ans=""
+      read -r -p "Wi-Fi connection failed. Continue anyway? [y/N]: " ans
+      [[ "$ans" == "y" || "$ans" == "Y" ]] || die "Aborting due to Wi-Fi connection failure."
+    fi
   fi
   if ! have_internet; then
-    die "No internet connectivity. Provide Wi-Fi credentials (or connect ethernet) and re-run."
+    local ans=""
+    read -r -p "No internet connectivity detected. Continue anyway? [y/N]: " ans
+    [[ "$ans" == "y" || "$ans" == "Y" ]] || die "No internet connectivity. Provide Wi-Fi credentials (or connect ethernet) and re-run."
   fi
   # If the user provided Wi-Fi, connect_wifi_current already verified internet & route.
   # If they skipped Wi-Fi, they might be on ethernet; allow that.
