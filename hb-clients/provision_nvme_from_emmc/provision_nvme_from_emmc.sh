@@ -698,7 +698,7 @@ write_headless_config() {
     fi
   fi
 
-  # Rotate display 180 degrees via KMS cmdline (HDMI-A-1).
+  # Propagate display rotation from the current system's cmdline (if present).
   # Keep cmdline a single line; add only if not already present.
   local cmdline_rotate=""
   if [[ -f "${boot_mnt}/cmdline.txt" ]]; then
@@ -707,11 +707,21 @@ write_headless_config() {
     cmdline_rotate="${boot_mnt}/firmware/cmdline.txt"
   fi
   if [[ -n "$cmdline_rotate" ]]; then
-    if ! grep -qE '(^|[[:space:]])video=HDMI-A-1:.*rotate=180([[:space:]]|$)' "$cmdline_rotate"; then
-      sed -i -e "1 s/$/ video=HDMI-A-1:rotate=180/" "$cmdline_rotate"
+    local current_cmdline=""
+    if [[ -f /boot/firmware/cmdline.txt ]]; then
+      current_cmdline="$(cat /boot/firmware/cmdline.txt 2>/dev/null || true)"
+    elif [[ -f /boot/cmdline.txt ]]; then
+      current_cmdline="$(cat /boot/cmdline.txt 2>/dev/null || true)"
+    fi
+    local rotate_token=""
+    rotate_token="$(printf '%s\n' "$current_cmdline" | grep -oE '(^|[[:space:]])video=[^[:space:]]*rotate=180[^[:space:]]*' | head -n1 | sed 's/^[[:space:]]*//')"
+    if [[ -n "$rotate_token" ]]; then
+      if ! grep -qE '(^|[[:space:]])video=[^[:space:]]*rotate=180([^[:space:]]*|$)' "$cmdline_rotate"; then
+        sed -i -e "1 s/$/ ${rotate_token}/" "$cmdline_rotate"
+      fi
     fi
   else
-    log "WARNING: Could not find cmdline.txt on boot partition to set display rotation."
+    log "WARNING: Could not find cmdline.txt on boot partition to propagate display rotation."
   fi
 
   # Wi-Fi on Bookworm uses NetworkManager; create a connection profile in rootfs.

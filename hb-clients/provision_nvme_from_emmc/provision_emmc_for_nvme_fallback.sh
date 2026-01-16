@@ -567,7 +567,8 @@ write_emmc_config() {
   pw_hash="$(openssl passwd -6 "$password")"
   printf '%s:%s\n' "$username" "$pw_hash" > "${boot_mnt}/userconf.txt"
 
-  # Rotate display 180 degrees via KMS cmdline (HDMI-A-1).
+  # Optionally set 180-degree rotation via KMS cmdline (HDMI-A-1).
+  # Use an explicit mode because some panels ignore rotate without it.
   local cmdline_rotate=""
   if [[ -f "${boot_mnt}/cmdline.txt" ]]; then
     cmdline_rotate="${boot_mnt}/cmdline.txt"
@@ -575,8 +576,16 @@ write_emmc_config() {
     cmdline_rotate="${boot_mnt}/firmware/cmdline.txt"
   fi
   if [[ -n "$cmdline_rotate" ]]; then
-    if ! grep -qE '(^|[[:space:]])video=HDMI-A-1:.*rotate=180([[:space:]]|$)' "$cmdline_rotate"; then
-      sed -i -e "1 s/$/ video=HDMI-A-1:rotate=180/" "$cmdline_rotate"
+    local rotate_choice="${HB_ROTATE_180:-}"
+    if [[ -z "$rotate_choice" ]]; then
+      local ans=""
+      read -r -p "Rotate display 180 degrees at 1280x800? [y/N]: " ans
+      [[ "$ans" == "y" || "$ans" == "Y" ]] && rotate_choice="yes" || rotate_choice="no"
+    fi
+    if [[ "$rotate_choice" == "yes" ]]; then
+      if ! grep -qE '(^|[[:space:]])video=HDMI-A-1:.*rotate=180([[:space:]]|$)' "$cmdline_rotate"; then
+        sed -i -e "1 s/$/ video=HDMI-A-1:1280x800M@60,rotate=180/" "$cmdline_rotate"
+      fi
     fi
   else
     log "WARNING: Could not find cmdline.txt on boot partition to set display rotation."
