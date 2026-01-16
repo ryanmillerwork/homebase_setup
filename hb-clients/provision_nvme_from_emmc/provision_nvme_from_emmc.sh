@@ -94,6 +94,34 @@ have_internet() {
   return 1
 }
 
+have_internet_via_iface() {
+  # Verifies internet reachability over a specific interface by temporarily pinning a /32 route
+  # to the test IP via that interface, then using the same TCP test as have_internet().
+  local iface="$1"
+  [[ -n "$iface" ]] || return 1
+  have_cmd ip || return 1
+
+  local old_route=""
+  old_route="$(ip route show 1.1.1.1/32 2>/dev/null | head -n1 || true)"
+
+  # Force traffic to 1.1.1.1 via the desired interface.
+  ip route replace 1.1.1.1/32 dev "$iface" metric 0 >/dev/null 2>&1 || return 1
+
+  local ok=1
+  if have_internet; then
+    ok=0
+  fi
+
+  # Restore prior state.
+  if [[ -n "$old_route" ]]; then
+    ip route replace $old_route >/dev/null 2>&1 || true
+  else
+    ip route del 1.1.1.1/32 >/dev/null 2>&1 || true
+  fi
+
+  return "$ok"
+}
+
 default_route_iface() {
   # Prints the interface used to reach 1.1.1.1 (best-effort). Empty if unknown.
   have_cmd ip || { echo ""; return 0; }
@@ -156,7 +184,7 @@ connect_wifi_current() {
   nmcli -w 30 con add type wifi ifname "$iface" con-name "$con_name" ssid "$ssid" >/dev/null 2>&1 \
     || die "Failed to create temporary Wi-Fi connection for SSID '$ssid'."
   nmcli -w 30 con modify "$con_name" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$pass" >/dev/null 2>&1 \
-    || die "Failed to set Wi-Fi password for SSID '$ssid'."
+    || die "Failed to apply Wi-Fi password for SSID '$ssid' (nmcli rejected it)."
   nmcli -w 60 con up "$con_name" ifname "$iface" >/dev/null 2>&1 \
     || die "Failed to connect to Wi-Fi SSID '$ssid' (auth may have failed)."
 
@@ -171,18 +199,19 @@ connect_wifi_current() {
     die "NetworkManager did not reach connected state after Wi-Fi connect."
   fi
 
-  # Ensure internet is reachable AND the default route goes over wifi (so we aren't accidentally
-  # succeeding via ethernet or another interface).
-  local def_if
-  def_if="$(default_route_iface)"
-  if [[ -n "$def_if" && "$def_if" != "$iface" ]]; then
-    die "Internet default route is via '$def_if', not Wi-Fi iface '$iface'. (Disconnect ethernet or set HB_ALLOW_NON_WIFI_INTERNET=1)"
-  fi
-  if ! have_internet; then
-    die "Wi-Fi connected to '$ssid' but internet check failed."
+  # Verify that *these* credentials work by proving we can reach the internet over Wi-Fi,
+  # even if the system's default route prefers ethernet.
+  if have_cmd ip; then
+    if ! have_internet_via_iface "$iface"; then
+      die "Wi-Fi connected to '$ssid' on '$iface' but internet is not reachable via Wi-Fi."
+    fi
+  else
+    # Fallback: we can only prove "internet works" (maybe via ethernet). Keep going but warn.
+    have_internet || die "Wi-Fi connected to '$ssid' but internet check failed."
+    log "WARNING: Could not force internet check over Wi-Fi (missing 'ip'). Proceeding."
   fi
 
-  log "Wi-Fi connected to '$ssid' and internet is reachable."
+  log "Wi-Fi connected to '$ssid' and internet is reachable via Wi-Fi."
 }
 
 root_source() {
