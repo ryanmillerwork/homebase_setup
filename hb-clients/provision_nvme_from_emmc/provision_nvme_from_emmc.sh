@@ -159,7 +159,25 @@ check_root_on_emmc_and_nvme_present() {
   fi
 
   if ! lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}' | grep -q '^nvme'; then
-    die "No NVMe disk detected (expected /dev/nvme*). Check PCIe/NVMe hardware first."
+    log "NVMe disk not detected (expected /dev/nvme*)."
+    log "Common causes on Pi 5: PCIe disabled in config, adapter power/seat, or missing EEPROM/firmware support."
+    if [[ -f /boot/firmware/config.txt ]]; then
+      if ! grep -qE '^\s*dtparam=pciex1(=on)?\s*$' /boot/firmware/config.txt; then
+        log "Hint: add this to /boot/firmware/config.txt and reboot, then re-run:"
+        log "  dtparam=pciex1=on"
+      fi
+    fi
+    if have_cmd lspci; then
+      log "Diagnostics: lspci (trimmed)"
+      lspci -nn 2>/dev/null | sed -n '1,80p' || true
+    else
+      log "Diagnostics: 'lspci' not found (install 'pciutils' to inspect PCIe)."
+    fi
+    if have_cmd dmesg; then
+      log "Diagnostics: dmesg (pcie/nvme lines)"
+      dmesg 2>/dev/null | grep -Ei 'pcie|nvme' | tail -n 80 || true
+    fi
+    die "No NVMe disk detected."
   fi
 }
 
@@ -563,22 +581,21 @@ main() {
 
   # Always prompt for Wi‑Fi first, then verify internet before we do any installs/downloads.
   local wifi_ssid="" wifi_pass=""
+  log "Starting Wi‑Fi selection (needed for downloads unless you already have internet via ethernet)."
   {
     read -r wifi_ssid
     read -r wifi_pass
   } < <(prompt_wifi)
 
-  check_bookworm_or_later
-  check_root_on_emmc_and_nvme_present
-
+  # If user skipped Wi‑Fi, require that internet is already working (e.g. ethernet).
   if [[ -n "$wifi_ssid" ]]; then
     connect_wifi_current "$wifi_ssid" "$wifi_pass"
   fi
-
-  if ! have_internet; then
-    die "No internet connectivity. Enter valid Wi‑Fi credentials (or connect ethernet) and re-run."
-  fi
+  have_internet || die "No internet connectivity. Provide Wi‑Fi credentials (or connect ethernet) and re-run."
   log "Internet connectivity verified."
+
+  check_bookworm_or_later
+  check_root_on_emmc_and_nvme_present
 
   local nvme_dev
   nvme_dev="$(pick_nvme_device)"
