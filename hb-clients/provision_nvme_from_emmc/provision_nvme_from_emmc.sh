@@ -94,9 +94,36 @@ have_internet() {
   return 1
 }
 
+default_route_iface() {
+  # Prints the interface used to reach 1.1.1.1 (best-effort). Empty if unknown.
+  have_cmd ip || { echo ""; return 0; }
+  ip route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}'
+}
+
 nmcli_connected() {
   have_cmd nmcli || return 1
   nmcli -t -f STATE g 2>/dev/null | grep -q '^connected$'
+}
+
+wifi_iface() {
+  # Returns the first connected wifi interface (e.g. wlan0), or empty.
+  have_cmd nmcli || { echo ""; return 0; }
+  nmcli -t -f DEVICE,TYPE,STATE dev status 2>/dev/null \
+    | awk -F: '$2=="wifi" && $3=="connected"{print $1; exit}'
+}
+
+connected_wifi_ssid() {
+  # Returns the SSID currently in use (best-effort), or empty.
+  have_cmd nmcli || { echo ""; return 0; }
+  nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | awk -F: '$1=="yes"{print $2; exit}'
+}
+
+nmcli_cleanup_temp_connection() {
+  local con_name="$1"
+  have_cmd nmcli || return 0
+  [[ -n "$con_name" ]] || return 0
+  # Don't error if it doesn't exist.
+  nmcli -w 5 con delete "$con_name" >/dev/null 2>&1 || true
 }
 
 connect_wifi_current() {
@@ -109,17 +136,53 @@ connect_wifi_current() {
   nmcli radio wifi on >/dev/null 2>&1 || true
   nmcli dev wifi rescan >/dev/null 2>&1 || true
 
-  # Try to connect. If this SSID is already configured, nmcli may not need the password.
-  if ! nmcli -w 30 dev wifi connect "$ssid" password "$pass" >/dev/null 2>&1; then
-    # Fallback attempt without password (in case it's already saved / open network / enterprise not supported here).
-    nmcli -w 30 dev wifi connect "$ssid" >/dev/null 2>&1 || die "Failed to connect to Wi-Fi SSID '$ssid' using nmcli."
+  local iface
+  iface="$(wifi_iface)"
+  if [[ -z "$iface" ]]; then
+    # pick any wifi device if not already connected
+    iface="$(nmcli -t -f DEVICE,TYPE dev status 2>/dev/null | awk -F: '$2=="wifi"{print $1; exit}')"
+  fi
+  [[ -n "$iface" ]] || die "No Wi-Fi interface found (nmcli shows no wifi devices)."
+
+  # Create a temp connection that uses exactly the provided password, so we don't accidentally
+  # reuse a previously-saved profile with different credentials.
+  local con_name="hb-wifi-${ssid//[^A-Za-z0-9_.-]/_}-$RANDOM"
+  nmcli_cleanup_temp_connection "$con_name"
+  trap 'nmcli_cleanup_temp_connection "'"$con_name"'"' RETURN
+
+  # Disconnect iface first to avoid "already activating" edge cases.
+  nmcli -w 5 dev disconnect "$iface" >/dev/null 2>&1 || true
+
+  nmcli -w 30 con add type wifi ifname "$iface" con-name "$con_name" ssid "$ssid" >/dev/null 2>&1 \
+    || die "Failed to create temporary Wi-Fi connection for SSID '$ssid'."
+  nmcli -w 30 con modify "$con_name" wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$pass" >/dev/null 2>&1 \
+    || die "Failed to set Wi-Fi password for SSID '$ssid'."
+  nmcli -w 60 con up "$con_name" ifname "$iface" >/dev/null 2>&1 \
+    || die "Failed to connect to Wi-Fi SSID '$ssid' (auth may have failed)."
+
+  # Verify we really connected to the requested SSID.
+  local got_ssid
+  got_ssid="$(connected_wifi_ssid)"
+  if [[ "$got_ssid" != "$ssid" ]]; then
+    die "Connected Wi-Fi SSID mismatch. Expected '$ssid', got '${got_ssid:-<none>}'"
   fi
 
-  if nmcli_connected; then
-    log "Wi-Fi connected."
-    return 0
+  if ! nmcli_connected; then
+    die "NetworkManager did not reach connected state after Wi-Fi connect."
   fi
-  die "Wi-Fi connection did not reach connected state."
+
+  # Ensure internet is reachable AND the default route goes over wifi (so we aren't accidentally
+  # succeeding via ethernet or another interface).
+  local def_if
+  def_if="$(default_route_iface)"
+  if [[ -n "$def_if" && "$def_if" != "$iface" ]]; then
+    die "Internet default route is via '$def_if', not Wi-Fi iface '$iface'. (Disconnect ethernet or set HB_ALLOW_NON_WIFI_INTERNET=1)"
+  fi
+  if ! have_internet; then
+    die "Wi-Fi connected to '$ssid' but internet check failed."
+  fi
+
+  log "Wi-Fi connected to '$ssid' and internet is reachable."
 }
 
 root_source() {
@@ -612,7 +675,11 @@ main() {
   if [[ -n "$wifi_ssid" ]]; then
     connect_wifi_current "$wifi_ssid" "$wifi_pass"
   fi
-  have_internet || die "No internet connectivity. Provide Wi-Fi credentials (or connect ethernet) and re-run."
+  if ! have_internet; then
+    die "No internet connectivity. Provide Wi-Fi credentials (or connect ethernet) and re-run."
+  fi
+  # If the user provided Wi-Fi, connect_wifi_current already verified internet & route.
+  # If they skipped Wi-Fi, they might be on ethernet; allow that.
   log "Internet connectivity verified."
 
   check_bookworm_or_later
