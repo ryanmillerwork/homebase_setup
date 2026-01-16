@@ -567,6 +567,21 @@ write_emmc_config() {
   pw_hash="$(openssl passwd -6 "$password")"
   printf '%s:%s\n' "$username" "$pw_hash" > "${boot_mnt}/userconf.txt"
 
+  # Rotate display 180 degrees via KMS cmdline (HDMI-A-1).
+  local cmdline_rotate=""
+  if [[ -f "${boot_mnt}/cmdline.txt" ]]; then
+    cmdline_rotate="${boot_mnt}/cmdline.txt"
+  elif [[ -f "${boot_mnt}/firmware/cmdline.txt" ]]; then
+    cmdline_rotate="${boot_mnt}/firmware/cmdline.txt"
+  fi
+  if [[ -n "$cmdline_rotate" ]]; then
+    if ! grep -qE '(^|[[:space:]])video=HDMI-A-1:.*rotate=180([[:space:]]|$)' "$cmdline_rotate"; then
+      sed -i -e "1 s/$/ video=HDMI-A-1:rotate=180/" "$cmdline_rotate"
+    fi
+  else
+    log "WARNING: Could not find cmdline.txt on boot partition to set display rotation."
+  fi
+
   # Ensure PCIe is enabled so NVMe is visible when booted from eMMC.
   local cfg="${boot_mnt}/config.txt"
   if [[ -f "$cfg" ]]; then
@@ -601,7 +616,7 @@ EOF
 Type=Application
 Name=Homebase NVMe Provisioning
 Comment=Run NVMe provisioning on boot
-Exec=x-terminal-emulator -e bash -lc 'cd /home/provision/homebase_setup/hb-clients/provision_nvme_from_emmc && sudo ./provision_nvme_from_emmc.sh'
+Exec=x-terminal-emulator -e bash -lc 'cd /home/provision/homebase_setup/hb-clients/provision_nvme_from_emmc && sudo ./provision_nvme_from_emmc.sh; echo; echo "Provisioning exited. Press Enter to close."; read -r _'
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF

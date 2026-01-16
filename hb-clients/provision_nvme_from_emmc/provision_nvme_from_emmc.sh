@@ -261,8 +261,8 @@ connect_wifi_current() {
 
   # Verify that *these* credentials work by proving we can reach the internet over Wi-Fi,
   # even if the system's default route prefers ethernet.
-  if ! wait_for_ipv4 "$iface" 60; then
-    log "ERROR: Wi-Fi connected to '$ssid' on '$iface' but no IPv4 address was acquired within 60s (DHCP may have failed)."
+  if ! wait_for_ipv4 "$iface" 120; then
+    log "ERROR: Wi-Fi connected to '$ssid' on '$iface' but no IPv4 address was acquired within 120s (DHCP may have failed)."
     return 1
   fi
 
@@ -696,6 +696,22 @@ write_headless_config() {
     else
       log "WARNING: Could not find cmdline.txt on boot partition to set Wi-Fi country code."
     fi
+  fi
+
+  # Rotate display 180 degrees via KMS cmdline (HDMI-A-1).
+  # Keep cmdline a single line; add only if not already present.
+  local cmdline_rotate=""
+  if [[ -f "${boot_mnt}/cmdline.txt" ]]; then
+    cmdline_rotate="${boot_mnt}/cmdline.txt"
+  elif [[ -f "${boot_mnt}/firmware/cmdline.txt" ]]; then
+    cmdline_rotate="${boot_mnt}/firmware/cmdline.txt"
+  fi
+  if [[ -n "$cmdline_rotate" ]]; then
+    if ! grep -qE '(^|[[:space:]])video=HDMI-A-1:.*rotate=180([[:space:]]|$)' "$cmdline_rotate"; then
+      sed -i -e "1 s/$/ video=HDMI-A-1:rotate=180/" "$cmdline_rotate"
+    fi
+  else
+    log "WARNING: Could not find cmdline.txt on boot partition to set display rotation."
   fi
 
   # Wi-Fi on Bookworm uses NetworkManager; create a connection profile in rootfs.
