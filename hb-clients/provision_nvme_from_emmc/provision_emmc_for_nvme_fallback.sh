@@ -286,7 +286,10 @@ list_emmc_candidates() {
       is_emmc="yes"
     fi
     echo "${dev}|${size}|${model}|${is_emmc}"
-  done < <(lsblk -dn -o NAME,TYPE,SIZE,MODEL | awk '$2=="disk" && $1 ~ /^mmcblk/ {print $1, $3, $4}')
+  done < <(
+    lsblk -dn -o NAME,TYPE,SIZE,MODEL \
+      | awk '$2=="disk" && $1 ~ /^mmcblk[0-9]+$/ {print $1, $3, $4}'
+  )
 }
 
 pick_emmc_device() {
