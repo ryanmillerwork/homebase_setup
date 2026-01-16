@@ -538,8 +538,7 @@ prompt_username_password() {
   local username password
   read -r -p "Enter username to create on the NVMe OS: " username
   [[ "$username" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "Invalid username '$username'"
-  read -r -s -p "Enter password for '$username': " password
-  echo >&2
+  read -r -p "Enter password for '$username' (shown): " password
   [[ -n "$password" ]] || die "Empty password not allowed."
   echo "$username"
   echo "$password"
