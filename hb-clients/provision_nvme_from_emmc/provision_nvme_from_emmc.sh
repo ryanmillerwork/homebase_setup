@@ -20,7 +20,8 @@ die() {
 }
 
 log() {
-  echo "$LOG_PREFIX $*"
+  # Logs go to stderr so functions that "return data" via stdout can be safely captured.
+  echo "$LOG_PREFIX $*" >&2
 }
 
 need_cmd() {
@@ -383,9 +384,9 @@ prompt_wifi() {
     mapfile -t _ssids_list < <(printf '%s\n' "$ssids")
     local i
     for i in "${!_ssids_list[@]}"; do
-      printf '  [%d] %s\n' "$i" "${_ssids_list[$i]}"
+      printf '  [%d] %s\n' "$i" "${_ssids_list[$i]}" >&2
     done
-    echo
+    echo >&2
     read -r -p "Select Wi‑Fi by number, or type an SSID (leave blank to skip Wi‑Fi): " choice
     if [[ -z "$choice" ]]; then
       echo ""
@@ -401,8 +402,8 @@ prompt_wifi() {
     log "WARNING: Could not scan Wi‑Fi SSIDs (no scan results)."
     if command -v nmcli >/dev/null 2>&1; then
       log "nmcli diagnostics:"
-      nmcli -t -f WIFI g 2>/dev/null || true
-      nmcli -t -f DEVICE,TYPE,STATE dev status 2>/dev/null || true
+      nmcli -t -f WIFI g 2>/dev/null >&2 || true
+      nmcli -t -f DEVICE,TYPE,STATE dev status 2>/dev/null >&2 || true
     fi
     read -r -p "Enter Wi‑Fi SSID to use (leave blank to skip Wi‑Fi): " ssid
     if [[ -z "$ssid" ]]; then
