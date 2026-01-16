@@ -15,6 +15,7 @@ set -euo pipefail
 LOG_PREFIX=""
 DEBUG="${HB_DEBUG:-0}"
 REQUIRE_WIFI_INTERNET="${HB_REQUIRE_WIFI_INTERNET:-0}"
+WIFI_COUNTRY="${HB_WIFI_COUNTRY:-}"
 
 # Used by EXIT trap for cleanup (must not be local vars, because traps can run after scope exits).
 HB_BOOT_MNT=""
@@ -574,6 +575,22 @@ prompt_hostname() {
   echo "$hn"
 }
 
+prompt_wifi_country() {
+  # Two-letter ISO 3166-1 alpha-2 country code, e.g. US, GB, DE.
+  local cc="${WIFI_COUNTRY}"
+  if [[ -n "$cc" ]]; then
+    cc="${cc^^}"
+    [[ "$cc" =~ ^[A-Z]{2}$ ]] || die "HB_WIFI_COUNTRY must be a 2-letter country code (e.g. US). Got '$WIFI_COUNTRY'"
+    echo "$cc"
+    return 0
+  fi
+
+  read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP): " cc
+  cc="${cc^^}"
+  [[ "$cc" =~ ^[A-Z]{2}$ ]] || die "Invalid country code '$cc' (expected 2 letters like US)."
+  echo "$cc"
+}
+
 wifi_scan_ssids() {
   local ssids=""
   if command -v nmcli >/dev/null 2>&1; then
@@ -665,6 +682,7 @@ write_headless_config() {
   local wifi_ssid="$5"
   local wifi_pass="$6"
   local hostname="$7"
+  local wifi_country="$8"
 
   log "Configuring NVMe OS (SSH/user/Wi-Fi)..."
 
@@ -684,6 +702,28 @@ write_headless_config() {
     fi
   else
     log "WARNING: Did not find config.txt on boot partition ($cfg)."
+  fi
+
+  # Set Wi-Fi regulatory domain to avoid rfkill block warning on first boot.
+  # On Bookworm, /etc/profile.d/wifi-check.sh checks for cfg80211.ieee80211_regdom=XX in cmdline.txt.
+  if [[ -n "$wifi_country" ]]; then
+    local cmdline=""
+    if [[ -f "${boot_mnt}/cmdline.txt" ]]; then
+      cmdline="${boot_mnt}/cmdline.txt"
+    elif [[ -f "${boot_mnt}/firmware/cmdline.txt" ]]; then
+      cmdline="${boot_mnt}/firmware/cmdline.txt"
+    fi
+
+    if [[ -n "$cmdline" ]]; then
+      if grep -qE '(^|[[:space:]])cfg80211\.ieee80211_regdom=[A-Z]{2}([[:space:]]|$)' "$cmdline"; then
+        sed -i -E "s/(^|[[:space:]])cfg80211\\.ieee80211_regdom=[A-Z]{2}([[:space:]]|$)/\\1cfg80211.ieee80211_regdom=${wifi_country}\\2/" "$cmdline"
+      else
+        # cmdline.txt must remain a single line.
+        sed -i -e "1 s/$/ cfg80211.ieee80211_regdom=${wifi_country}/" "$cmdline"
+      fi
+    else
+      log "WARNING: Could not find cmdline.txt on boot partition to set Wi-Fi country code."
+    fi
   fi
 
   # Wi-Fi on Bookworm uses NetworkManager; create a connection profile in rootfs.
@@ -823,6 +863,9 @@ main() {
     read -r wifi_pass
   } < <(prompt_wifi)
 
+  local wifi_country
+  wifi_country="$(prompt_wifi_country)"
+
   # If user skipped Wi-Fi, require that internet is already working (e.g. ethernet).
   if [[ -n "$wifi_ssid" ]]; then
     connect_wifi_current "$wifi_ssid" "$wifi_pass"
@@ -874,7 +917,7 @@ main() {
     read -r password
   } < <(prompt_username_password)
 
-  write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname"
+  write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country"
 
   cleanup_mounts "$HB_BOOT_MNT" "$HB_ROOT_MNT"
   trap - EXIT

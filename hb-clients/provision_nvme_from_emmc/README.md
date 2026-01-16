@@ -29,6 +29,7 @@ sudo ./provision_nvme_from_emmc.sh
 You will be prompted to:
 
 - enter Wi-Fi SSID/password (used to connect the current system; then also applied to the NVMe OS)
+- enter Wi-Fi country code (2 letters, e.g. `US`, `CA`, `GB`, `DE`, `FR`, `JP`) to avoid rfkill block warning on first boot
 - choose the NVMe disk (if there are multiple)
 - type **`ERASE`** to confirm destroying that disk
 - enter desired **hostname**
