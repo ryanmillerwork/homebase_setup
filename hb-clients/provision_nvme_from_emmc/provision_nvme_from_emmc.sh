@@ -13,6 +13,7 @@ set -euo pipefail
 # - Reboot
 
 LOG_PREFIX="[provision-nvme]"
+DEBUG="${HB_DEBUG:-0}"
 
 die() {
   echo "$LOG_PREFIX ERROR: $*" >&2
@@ -22,6 +23,11 @@ die() {
 log() {
   # Logs go to stderr so functions that "return data" via stdout can be safely captured.
   echo "$LOG_PREFIX $*" >&2
+}
+
+debug() {
+  [[ "$DEBUG" == "1" ]] || return 0
+  echo "$LOG_PREFIX DEBUG: $*" >&2
 }
 
 need_cmd() {
@@ -160,25 +166,27 @@ check_root_on_emmc_and_nvme_present() {
   fi
 
   if ! lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}' | grep -q '^nvme'; then
-    log "NVMe disk not detected (expected /dev/nvme*)."
-    log "Common causes on Pi 5: PCIe disabled in config, adapter power/seat, or missing EEPROM/firmware support."
-    if [[ -f /boot/firmware/config.txt ]]; then
-      if ! grep -qE '^\s*dtparam=pciex1(=on)?\s*$' /boot/firmware/config.txt; then
-        log "Hint: add this to /boot/firmware/config.txt and reboot, then re-run:"
-        log "  dtparam=pciex1=on"
+    if [[ "$DEBUG" == "1" ]]; then
+      debug "NVMe disk not detected (expected /dev/nvme*)."
+      debug "Common causes on Pi 5: PCIe disabled in config, adapter power/seat, or missing EEPROM/firmware support."
+      if [[ -f /boot/firmware/config.txt ]]; then
+        if ! grep -qE '^\s*dtparam=pciex1(=on)?\s*$' /boot/firmware/config.txt; then
+          debug "Hint: add this to /boot/firmware/config.txt and reboot, then re-run:"
+          debug "  dtparam=pciex1=on"
+        fi
+      fi
+      if have_cmd lspci; then
+        debug "Diagnostics: lspci (trimmed)"
+        lspci -nn 2>/dev/null | sed -n '1,80p' >&2 || true
+      else
+        debug "Diagnostics: 'lspci' not found (install 'pciutils' to inspect PCIe)."
+      fi
+      if have_cmd dmesg; then
+        debug "Diagnostics: dmesg (pcie/nvme lines)"
+        dmesg 2>/dev/null | grep -Ei 'pcie|nvme' | tail -n 80 >&2 || true
       fi
     fi
-    if have_cmd lspci; then
-      log "Diagnostics: lspci (trimmed)"
-      lspci -nn 2>/dev/null | sed -n '1,80p' || true
-    else
-      log "Diagnostics: 'lspci' not found (install 'pciutils' to inspect PCIe)."
-    fi
-    if have_cmd dmesg; then
-      log "Diagnostics: dmesg (pcie/nvme lines)"
-      dmesg 2>/dev/null | grep -Ei 'pcie|nvme' | tail -n 80 || true
-    fi
-    die "No NVMe disk detected."
+    die "No NVMe disk detected (expected /dev/nvme*)."
   fi
 }
 
