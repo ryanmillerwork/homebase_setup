@@ -417,6 +417,9 @@ def ensure_ap_connection() -> None:
         "connection",
         "modify",
         cfg.ap_con_name,
+        # Ensure the profile is bound to the AP interface (prevents "mismatching interface name" on eth0).
+        "connection.interface-name",
+        cfg.ap_if,
         "802-11-wireless.mode",
         "ap",
         "ipv4.method",
@@ -432,13 +435,19 @@ def ensure_ap_connection() -> None:
             "wpa-psk",
             "wifi-sec.psk",
             cfg.setup_psk,
+            # Clear any WEP leftovers if the profile was previously edited/created differently.
+            "802-11-wireless-security.wep-key0",
+            "",
         ]
     else:
-        # Clear any previous security settings on this connection.
+        # Open AP (no password): do NOT set key-mgmt=none, because NetworkManager treats that
+        # as WEP and will require a wep key. Instead, clear the security section.
         base_args += [
-            "wifi-sec.key-mgmt",
-            "none",
             "wifi-sec.psk",
+            "",
+            "802-11-wireless-security.key-mgmt",
+            "",
+            "802-11-wireless-security.wep-key0",
             "",
         ]
 
