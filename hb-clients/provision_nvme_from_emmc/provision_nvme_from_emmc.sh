@@ -14,6 +14,7 @@ set -euo pipefail
 
 LOG_PREFIX=""
 DEBUG="${HB_DEBUG:-0}"
+REQUIRE_WIFI_INTERNET="${HB_REQUIRE_WIFI_INTERNET:-0}"
 
 die() {
   if [[ -n "$LOG_PREFIX" ]]; then
@@ -114,11 +115,31 @@ opt = iface.encode("utf-8", errors="strict")
 if not opt.endswith(b"\0"):
     opt += b"\0"
 
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.settimeout(3)
-s.setsockopt(socket.SOL_SOCKET, 25, opt)  # SO_BINDTODEVICE = 25
-s.connect(("1.1.1.1", 443))
-s.close()
+targets = [
+    ("1.1.1.1", 443),           # Cloudflare
+    ("1.0.0.1", 443),           # Cloudflare alt
+    ("93.184.216.34", 443),     # example.com
+    ("93.184.216.34", 80),      # example.com
+]
+
+last = None
+for host, port in targets:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(3)
+    s.setsockopt(socket.SOL_SOCKET, 25, opt)  # SO_BINDTODEVICE = 25
+    try:
+        s.connect((host, port))
+        s.close()
+        raise SystemExit(0)
+    except Exception as e:
+        last = e
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+raise SystemExit(1)
 PY
     return $?
   fi
@@ -161,6 +182,13 @@ nmcli_cleanup_temp_connection() {
   [[ -n "$con_name" ]] || return 0
   # Don't error if it doesn't exist.
   nmcli -w 5 con delete "$con_name" >/dev/null 2>&1 || true
+}
+
+iface_has_ipv4() {
+  local iface="$1"
+  [[ -n "$iface" ]] || return 1
+  have_cmd ip || return 1
+  ip -4 addr show dev "$iface" 2>/dev/null | grep -qE '^\s*inet\s+'
 }
 
 connect_wifi_current() {
@@ -210,17 +238,21 @@ connect_wifi_current() {
 
   # Verify that *these* credentials work by proving we can reach the internet over Wi-Fi,
   # even if the system's default route prefers ethernet.
-  if have_cmd ip; then
-    if ! have_internet_via_iface "$iface"; then
-      die "Wi-Fi connected to '$ssid' on '$iface' but internet is not reachable via Wi-Fi."
-    fi
+  if iface_has_ipv4 "$iface"; then
+    debug "Wi-Fi iface '$iface' has an IPv4 address."
   else
-    # Fallback: we can only prove "internet works" (maybe via ethernet). Keep going but warn.
-    have_internet || die "Wi-Fi connected to '$ssid' but internet check failed."
-    log "WARNING: Could not force internet check over Wi-Fi (missing 'ip'). Proceeding."
+    die "Wi-Fi connected to '$ssid' on '$iface' but no IPv4 address was acquired (DHCP may have failed)."
   fi
 
-  log "Wi-Fi connected to '$ssid' and internet is reachable via Wi-Fi."
+  if have_internet_via_iface "$iface"; then
+    log "Wi-Fi connected to '$ssid' and internet is reachable via Wi-Fi."
+  else
+    if [[ "$REQUIRE_WIFI_INTERNET" == "1" ]]; then
+      die "Wi-Fi connected to '$ssid' on '$iface' but internet is not reachable via Wi-Fi."
+    fi
+    log "WARNING: Wi-Fi connected to '$ssid' but internet probe via Wi-Fi failed (captive portal/firewall?). Continuing anyway."
+    log "         To require Wi-Fi internet reachability, re-run with HB_REQUIRE_WIFI_INTERNET=1"
+  fi
 }
 
 root_source() {
