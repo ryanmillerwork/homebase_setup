@@ -232,7 +232,11 @@ connect_wifi_current() {
   # reuse a previously-saved profile with different credentials.
   local con_name="hb-wifi-${ssid//[^A-Za-z0-9_.-]/_}-$RANDOM"
   nmcli_cleanup_temp_connection "$con_name"
-  trap 'nmcli_cleanup_temp_connection "'"$con_name"'"' RETURN
+  local cleanup_temp="yes"
+  if [[ -z "$prev_con" ]]; then
+    cleanup_temp="no"
+  fi
+  trap 'if [[ "'"$cleanup_temp"'" == "yes" ]]; then nmcli_cleanup_temp_connection "'"$con_name"'"; fi' RETURN
 
   # Disconnect iface first to avoid "already activating" edge cases.
   nmcli -w 5 dev disconnect "$iface" >/dev/null 2>&1 || true
@@ -567,10 +571,48 @@ prompt_hostname() {
 prompt_wifi_country() {
   # Two-letter ISO 3166-1 alpha-2 country code, e.g. US, GB, DE.
   local cc
-  read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP): " cc
-  cc="${cc^^}"
-  [[ "$cc" =~ ^[A-Z]{2}$ ]] || die "Invalid country code '$cc' (expected 2 letters like US)."
-  echo "$cc"
+  while true; do
+    read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP): " cc
+    cc="${cc^^}"
+    if [[ "$cc" =~ ^[A-Z]{2}$ ]]; then
+      echo "$cc"
+      return 0
+    fi
+    log "Invalid country code '$cc'. Please enter 2 letters like US."
+  done
+}
+
+prompt_timezone() {
+  # Timezone in Region/City format, e.g. America/Los_Angeles.
+  local tz
+  while true; do
+    read -r -p "Enter timezone for NVMe OS (e.g. America/New_York, America/Los_Angeles, Europe/London, Asia/Tokyo). Default: UTC. Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones : " tz
+    tz="${tz:-UTC}"
+    if [[ -f "/usr/share/zoneinfo/${tz}" ]]; then
+      echo "$tz"
+      return 0
+    fi
+    log "Invalid timezone '${tz}'. Example: America/Los_Angeles, Europe/London, Asia/Tokyo."
+  done
+}
+
+prompt_locale() {
+  # Locale in ll_CC.UTF-8 format, e.g. en_US.UTF-8.
+  local loc base
+  while true; do
+    read -r -p "Enter locale for NVMe OS (e.g. en_US.UTF-8, en_GB.UTF-8, fr_FR.UTF-8, de_DE.UTF-8). Default: en_US.UTF-8. Full list: https://sourceware.org/glibc/wiki/Locales : " loc
+    loc="${loc:-en_US.UTF-8}"
+    if [[ ! "$loc" =~ ^[A-Za-z_]+\.UTF-8$ ]]; then
+      log "Invalid locale '${loc}'. Example: en_US.UTF-8, en_GB.UTF-8, fr_FR.UTF-8, de_DE.UTF-8."
+      continue
+    fi
+    base="${loc%%.*}"
+    if [[ -f "/usr/share/i18n/locales/${base}" ]]; then
+      echo "$loc"
+      return 0
+    fi
+    log "Locale '${loc}' not found on this system. Example: en_US.UTF-8, en_GB.UTF-8, fr_FR.UTF-8, de_DE.UTF-8."
+  done
 }
 
 wifi_scan_ssids() {
@@ -616,17 +658,24 @@ prompt_wifi() {
       printf '  [%d] %s\n' "$i" "${_ssids_list[$i]}" >&2
     done
     echo >&2
-    read -r -p "Select Wi-Fi by number, or type an SSID (leave blank to skip Wi-Fi): " choice
-    if [[ -z "$choice" ]]; then
-      echo ""
-      echo ""
-      return 0
-    fi
-    if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 0 && "$choice" -lt "${#_ssids_list[@]}" ]]; then
-      ssid="${_ssids_list[$choice]}"
-    else
+    while true; do
+      read -r -p "Select Wi-Fi by number, or type an SSID (leave blank to skip Wi-Fi): " choice
+      if [[ -z "$choice" ]]; then
+        echo ""
+        echo ""
+        return 0
+      fi
+      if [[ "$choice" =~ ^[0-9]+$ ]]; then
+        if [[ "$choice" -ge 0 && "$choice" -lt "${#_ssids_list[@]}" ]]; then
+          ssid="${_ssids_list[$choice]}"
+          break
+        fi
+        log "Invalid selection '$choice'. Please choose one of the listed numbers."
+        continue
+      fi
       ssid="$choice"
-    fi
+      break
+    done
   else
     log "WARNING: Could not scan Wi-Fi SSIDs (no scan results)."
     if command -v nmcli >/dev/null 2>&1; then
@@ -664,6 +713,8 @@ write_headless_config() {
   local wifi_pass="$6"
   local hostname="$7"
   local wifi_country="$8"
+  local timezone="$9"
+  local locale="${10}"
 
   log "Configuring NVMe OS (SSH/user/Wi-Fi)..."
 
@@ -790,6 +841,27 @@ EOF
       log "WARNING: ${root_mnt}/etc/hosts not found; hostname may not fully apply."
     fi
   fi
+
+  # Timezone for the installed system.
+  if [[ -n "$timezone" ]]; then
+    echo "$timezone" > "${root_mnt}/etc/timezone"
+    ln -sfn "/usr/share/zoneinfo/${timezone}" "${root_mnt}/etc/localtime"
+  fi
+
+  # Locale for the installed system.
+  if [[ -n "$locale" ]]; then
+    local locale_gen="${root_mnt}/etc/locale.gen"
+    if [[ -f "$locale_gen" ]]; then
+      if grep -qE "^[# ]*${locale}[[:space:]]+UTF-8" "$locale_gen"; then
+        sed -i -E "s/^[# ]*(${locale}[[:space:]]+UTF-8)/\\1/" "$locale_gen"
+      else
+        echo "${locale} UTF-8" >> "$locale_gen"
+      fi
+    else
+      echo "${locale} UTF-8" > "$locale_gen"
+    fi
+    echo "LANG=${locale}" > "${root_mnt}/etc/default/locale"
+  fi
 }
 
 mount_nvme_partitions_for_config() {
@@ -874,6 +946,10 @@ main() {
 
   local wifi_country
   wifi_country="$(prompt_wifi_country)"
+
+  local timezone locale
+  timezone="$(prompt_timezone)"
+  locale="$(prompt_locale)"
 
   {
     read -r wifi_ssid
@@ -960,7 +1036,7 @@ main() {
     read -r password
   } < <(prompt_username_password)
 
-  write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country"
+  write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country" "$timezone" "$locale"
 
   cleanup_mounts "$HB_BOOT_MNT" "$HB_ROOT_MNT"
   trap - EXIT

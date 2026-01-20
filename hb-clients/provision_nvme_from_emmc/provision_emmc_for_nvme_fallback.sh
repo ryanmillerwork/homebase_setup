@@ -339,7 +339,8 @@ install_packages() {
     parted \
     dosfstools e2fsprogs \
     iw network-manager \
-    git
+    git \
+    wmctrl x11-utils
 }
 
 download_image_xz() {
@@ -625,7 +626,7 @@ EOF
 Type=Application
 Name=Homebase NVMe Provisioning
 Comment=Run NVMe provisioning on boot
-Exec=x-terminal-emulator -e bash -lc 'cd /home/provision/homebase_setup/hb-clients/provision_nvme_from_emmc && sudo ./provision_nvme_from_emmc.sh; echo; echo "Provisioning exited. Press Enter to close."; read -r _'
+Exec=bash -lc 'TITLE="HB Provision"; x-terminal-emulator --title "$TITLE" -e bash -lc "cd /home/provision/homebase_setup/hb-clients/provision_nvme_from_emmc && sudo ./provision_nvme_from_emmc.sh; echo; echo \"Provisioning exited. Press Enter to close.\"; read -r _" & sleep 0.8; W=$(xdpyinfo | awk "/dimensions/ {print \$2}" | cut -dx -f1); H=$(xdpyinfo | awk "/dimensions/ {print \$2}" | cut -dx -f2); H2=$((H*2/3)); for i in $(seq 1 10); do wmctrl -r "$TITLE" -e 0,0,0,$W,$H2 && break; sleep 0.2; done'
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
