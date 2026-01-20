@@ -551,21 +551,35 @@ find_nvme_partition() {
 
 prompt_username_password() {
   local username password
-  read -r -p "Enter username to create on the NVMe OS: " username
-  [[ "$username" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "Invalid username '$username'"
-  read -r -p "Enter password for '$username' (shown): " password
-  [[ -n "$password" ]] || die "Empty password not allowed."
-  echo "$username"
-  echo "$password"
+  while true; do
+    read -r -p "Enter username to create on the NVMe OS: " username
+    if [[ ! "$username" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+      log "Invalid username '$username' (use a-z, 0-9, '_' or '-', must start with a letter or '_')."
+      continue
+    fi
+    read -r -p "Enter password for '$username' (shown): " password
+    if [[ -z "$password" ]]; then
+      log "Empty password not allowed. Please try again."
+      continue
+    fi
+    echo "$username"
+    echo "$password"
+    return 0
+  done
 }
 
 prompt_hostname() {
   local hn
-  read -r -p "Enter desired hostname for the NVMe OS: " hn
-  hn="${hn,,}"
-  # Basic hostname validation: 1-63 chars, [a-z0-9-], no leading/trailing '-', no consecutive dots (we disallow dots).
-  [[ "$hn" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "Invalid hostname '$hn' (use a-z, 0-9, and '-', max 63 chars)."
-  echo "$hn"
+  while true; do
+    read -r -p "Enter desired hostname for the NVMe OS: " hn
+    hn="${hn,,}"
+    # Basic hostname validation: 1-63 chars, [a-z0-9-], no leading/trailing '-', no consecutive dots (we disallow dots).
+    if [[ "$hn" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+      echo "$hn"
+      return 0
+    fi
+    log "Invalid hostname '$hn' (use a-z, 0-9, and '-', max 63 chars)."
+  done
 }
 
 prompt_wifi_country() {
@@ -692,17 +706,35 @@ prompt_wifi() {
     fi
   fi
 
-  if [[ -z "$ssid" ]]; then
-    echo ""
-    echo ""
+  while true; do
+    if [[ -z "$ssid" ]]; then
+      echo ""
+      echo ""
+      return 0
+    fi
+    if [[ "$ssid" == *$'\n'* || "$ssid" == *$'\r'* ]]; then
+      log "SSID contains newline characters. Please re-enter."
+      read -r -p "Enter Wi-Fi SSID to use (leave blank to skip Wi-Fi): " ssid
+      if [[ -z "$ssid" ]]; then
+        echo ""
+        echo ""
+        return 0
+      fi
+      continue
+    fi
+    read -r -p "Enter Wi-Fi password for '$ssid' (shown): " pass
+    if [[ -z "$pass" ]]; then
+      log "Empty Wi-Fi password not allowed. Please try again."
+      continue
+    fi
+    if [[ "$pass" == *$'\n'* || "$pass" == *$'\r'* ]]; then
+      log "Wi-Fi password contains newline characters. Please try again."
+      continue
+    fi
+    echo "$ssid"
+    echo "$pass"
     return 0
-  fi
-  [[ "$ssid" != *$'\n'* && "$ssid" != *$'\r'* ]] || die "SSID contains newline characters; refusing."
-  read -r -p "Enter Wi-Fi password for '$ssid' (shown): " pass
-  [[ -n "$pass" ]] || die "Empty Wi-Fi password not allowed."
-  [[ "$pass" != *$'\n'* && "$pass" != *$'\r'* ]] || die "Wi-Fi password contains newline characters; refusing."
-  echo "$ssid"
-  echo "$pass"
+  done
 }
 
 write_headless_config() {
