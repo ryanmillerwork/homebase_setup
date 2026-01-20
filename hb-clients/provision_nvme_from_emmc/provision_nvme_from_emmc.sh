@@ -224,6 +224,10 @@ connect_wifi_current() {
     return 1
   fi
 
+  # Remember previously active connection for this iface so we can restore it.
+  local prev_con=""
+  prev_con="$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null | awk -F: -v d="$iface" '$2==d{print $1; exit}')"
+
   # Create a temp connection that uses exactly the provided password, so we don't accidentally
   # reuse a previously-saved profile with different credentials.
   local con_name="hb-wifi-${ssid//[^A-Za-z0-9_.-]/_}-$RANDOM"
@@ -270,6 +274,13 @@ connect_wifi_current() {
     log "Wi-Fi connected to '$ssid' and internet is reachable via Wi-Fi."
   else
     log "WARNING: Wi-Fi connected to '$ssid' but internet probe via Wi-Fi failed (captive portal/firewall?). Continuing anyway."
+  fi
+
+  # Restore previous connection (if any) so we don't leave the user disconnected.
+  if [[ -n "$prev_con" && "$prev_con" != "$con_name" ]]; then
+    if ! nmcli -w 20 con up "$prev_con" >/dev/null 2>&1; then
+      log "WARNING: Failed to restore previous connection '$prev_con' after Wi-Fi validation."
+    fi
   fi
 }
 
