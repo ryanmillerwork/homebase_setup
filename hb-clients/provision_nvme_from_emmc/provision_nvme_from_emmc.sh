@@ -597,21 +597,22 @@ prompt_timezone() {
 }
 
 prompt_locale() {
-  # Locale in ll_CC.UTF-8 format, e.g. en_US.UTF-8.
+  # Locale in ll_CC format (user can type lower-case like en_us).
   local loc base
   while true; do
-    read -r -p "Enter locale for NVMe OS (e.g. en_US.UTF-8, en_GB.UTF-8, fr_FR.UTF-8, de_DE.UTF-8). Default: en_US.UTF-8. Full list: https://sourceware.org/glibc/wiki/Locales : " loc
-    loc="${loc:-en_US.UTF-8}"
-    if [[ ! "$loc" =~ ^[A-Za-z_]+\.UTF-8$ ]]; then
-      log "Invalid locale '${loc}'. Example: en_US.UTF-8, en_GB.UTF-8, fr_FR.UTF-8, de_DE.UTF-8."
+    read -r -p "Enter locale for NVMe OS (e.g. en_us, en_gb, fr_fr, de_de). Default: en_us. Full list: https://sourceware.org/glibc/wiki/Locales : " loc
+    loc="${loc:-en_us}"
+    loc="$(echo "$loc" | tr 'A-Z' 'a-z')"
+    if [[ ! "$loc" =~ ^[a-z]{2}_[a-z]{2}$ ]]; then
+      log "Invalid locale '${loc}'. Example: en_us, en_gb, fr_fr, de_de."
       continue
     fi
-    base="${loc%%.*}"
+    base="${loc%_*}_$(echo "${loc#*_}" | tr 'a-z' 'A-Z')"
     if [[ -f "/usr/share/i18n/locales/${base}" ]]; then
-      echo "$loc"
+      echo "${base}.UTF-8"
       return 0
     fi
-    log "Locale '${loc}' not found on this system. Example: en_US.UTF-8, en_GB.UTF-8, fr_FR.UTF-8, de_DE.UTF-8."
+    log "Locale '${loc}' not found on this system. Example: en_us, en_gb, fr_fr, de_de."
   done
 }
 
@@ -861,6 +862,14 @@ EOF
       echo "${locale} UTF-8" > "$locale_gen"
     fi
     echo "LANG=${locale}" > "${root_mnt}/etc/default/locale"
+    # Generate locales in the target rootfs (best-effort).
+    if [[ -x "${root_mnt}/usr/sbin/locale-gen" ]]; then
+      if ! chroot "$root_mnt" /usr/sbin/locale-gen "$locale" >/dev/null 2>&1; then
+        log "WARNING: Failed to run locale-gen in target rootfs; locale may be missing."
+      fi
+    else
+      log "WARNING: locale-gen not found in target rootfs; locale may be missing."
+    fi
   fi
 }
 
