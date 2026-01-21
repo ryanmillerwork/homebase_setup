@@ -945,26 +945,6 @@ EOF
     fi
   fi
 
-  # Ensure Wi-Fi radio is enabled on boot (NetworkManager).
-  if [[ -d "${root_mnt}/etc/systemd/system" ]]; then
-    local svc="${root_mnt}/etc/systemd/system/hb-wifi-on.service"
-    cat > "$svc" <<'EOF'
-[Unit]
-Description=Enable Wi-Fi radio on boot
-After=NetworkManager.service
-Wants=NetworkManager.service
-
-[Service]
-Type=oneshot
-ExecStart=/usr/bin/nmcli radio wifi on
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    mkdir -p "${root_mnt}/etc/systemd/system/multi-user.target.wants"
-    ln -sf /etc/systemd/system/hb-wifi-on.service \
-      "${root_mnt}/etc/systemd/system/multi-user.target.wants/hb-wifi-on.service"
-  fi
 }
 
 mount_nvme_partitions_for_config() {
