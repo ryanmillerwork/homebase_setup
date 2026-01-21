@@ -769,6 +769,31 @@ write_headless_config() {
     log "WARNING: Did not find config.txt on boot partition ($cfg)."
   fi
 
+  # Prefer antenna 2 if supported.
+  if [[ -f "$cfg" ]]; then
+    if ! grep -qE '^\s*dtparam=ant2\s*$' "$cfg"; then
+      echo "dtparam=ant2" >> "$cfg"
+    fi
+  fi
+
+  # Camera config: disable auto-detect and force imx708 overlay.
+  if [[ -f "$cfg" ]]; then
+    if grep -qE '^\s*camera_auto_detect=' "$cfg"; then
+      sed -i -E 's/^\s*camera_auto_detect=.*/camera_auto_detect=0/' "$cfg"
+    else
+      echo "camera_auto_detect=0" >> "$cfg"
+    fi
+    if ! grep -qE '^\s*dtoverlay=imx708\s*$' "$cfg"; then
+      # Add under [all] if present; otherwise append.
+      if grep -qE '^\s*\[all\]\s*$' "$cfg"; then
+        sed -i -E '/^\s*\[all\]\s*$/a dtoverlay=imx708' "$cfg"
+      else
+        echo "[all]" >> "$cfg"
+        echo "dtoverlay=imx708" >> "$cfg"
+      fi
+    fi
+  fi
+
   # Set Wi-Fi regulatory domain to avoid rfkill block warning on first boot.
   # On Bookworm, /etc/profile.d/wifi-check.sh checks for cfg80211.ieee80211_regdom=XX in cmdline.txt.
   if [[ -n "$wifi_country" ]]; then
@@ -884,15 +909,8 @@ EOF
   # Locale for the installed system.
   if [[ -n "$locale" ]]; then
     local locale_gen="${root_mnt}/etc/locale.gen"
-    if [[ -f "$locale_gen" ]]; then
-      if grep -qE "^[# ]*${locale}[[:space:]]+UTF-8" "$locale_gen"; then
-        sed -i -E "s/^[# ]*(${locale}[[:space:]]+UTF-8)/\\1/" "$locale_gen"
-      else
-        echo "${locale} UTF-8" >> "$locale_gen"
-      fi
-    else
-      echo "${locale} UTF-8" > "$locale_gen"
-    fi
+    # Only enable the selected locale to avoid mixed defaults (e.g., en_GB vs en_US).
+    echo "${locale} UTF-8" > "$locale_gen"
     echo "LANG=${locale}" > "${root_mnt}/etc/default/locale"
     # Generate locales in the target rootfs (best-effort).
     if [[ -x "${root_mnt}/usr/sbin/locale-gen" ]]; then
@@ -902,6 +920,50 @@ EOF
     else
       log "WARNING: locale-gen not found in target rootfs; locale may be missing."
     fi
+  fi
+
+  # Keyboard layout: align with locale country (best-effort).
+  if [[ -n "$locale" ]]; then
+    local kb_layout=""
+    case "$locale" in
+      en_US.UTF-8) kb_layout="us" ;;
+      en_GB.UTF-8) kb_layout="gb" ;;
+    esac
+    if [[ -n "$kb_layout" ]]; then
+      local kb_file="${root_mnt}/etc/default/keyboard"
+      if [[ -f "$kb_file" ]]; then
+        if grep -qE '^XKBLAYOUT=' "$kb_file"; then
+          sed -i -E "s/^XKBLAYOUT=.*/XKBLAYOUT=\"${kb_layout}\"/" "$kb_file"
+        else
+          echo "XKBLAYOUT=\"${kb_layout}\"" >> "$kb_file"
+        fi
+      else
+        cat > "$kb_file" <<EOF
+XKBLAYOUT="${kb_layout}"
+EOF
+      fi
+    fi
+  fi
+
+  # Ensure Wi-Fi radio is enabled on boot (NetworkManager).
+  if [[ -d "${root_mnt}/etc/systemd/system" ]]; then
+    local svc="${root_mnt}/etc/systemd/system/hb-wifi-on.service"
+    cat > "$svc" <<'EOF'
+[Unit]
+Description=Enable Wi-Fi radio on boot
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/nmcli radio wifi on
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    mkdir -p "${root_mnt}/etc/systemd/system/multi-user.target.wants"
+    ln -sf /etc/systemd/system/hb-wifi-on.service \
+      "${root_mnt}/etc/systemd/system/multi-user.target.wants/hb-wifi-on.service"
   fi
 }
 
@@ -927,6 +989,41 @@ cleanup_mounts() {
   if [[ -n "${root_mnt:-}" ]]; then
     umount "$root_mnt" 2>/dev/null || true
   fi
+}
+
+mount_chroot_env() {
+  local root_mnt="$1"
+  mount --bind /dev "${root_mnt}/dev"
+  mount --bind /dev/pts "${root_mnt}/dev/pts"
+  mount -t proc proc "${root_mnt}/proc"
+  mount -t sysfs sys "${root_mnt}/sys"
+}
+
+unmount_chroot_env() {
+  local root_mnt="$1"
+  umount "${root_mnt}/sys" 2>/dev/null || true
+  umount "${root_mnt}/proc" 2>/dev/null || true
+  umount "${root_mnt}/dev/pts" 2>/dev/null || true
+  umount "${root_mnt}/dev" 2>/dev/null || true
+}
+
+configure_nvme_packages_and_services() {
+  local root_mnt="$1"
+  log "Configuring packages/services in NVMe OS (apt upgrade, dev packages, disable bluetooth)..."
+  mount_chroot_env "$root_mnt"
+  trap 'unmount_chroot_env "'"$root_mnt"'"' RETURN
+
+  chroot "$root_mnt" /bin/bash -lc 'apt update && apt full-upgrade -y && apt clean' \
+    || die "Failed to run apt update/full-upgrade in NVMe rootfs."
+
+  chroot "$root_mnt" /bin/bash -lc 'apt install -y build-essential cmake libevdev-dev libpq-dev libcamera-apps' \
+    || die "Failed to install dev packages in NVMe rootfs."
+
+  chroot "$root_mnt" /bin/bash -lc 'systemctl disable bluetooth && systemctl stop bluetooth' \
+    || die "Failed to disable bluetooth in NVMe rootfs."
+
+  unmount_chroot_env "$root_mnt"
+  trap - RETURN
 }
 
 set_eeprom_boot_to_nvme() {
@@ -1078,6 +1175,8 @@ main() {
   } < <(prompt_username_password)
 
   write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country" "$timezone" "$locale"
+
+  configure_nvme_packages_and_services "$HB_ROOT_MNT"
 
   cleanup_mounts "$HB_BOOT_MNT" "$HB_ROOT_MNT"
   trap - EXIT
