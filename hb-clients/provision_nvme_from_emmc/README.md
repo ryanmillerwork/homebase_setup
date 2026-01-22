@@ -5,7 +5,8 @@ Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while bo
 ## What it does
 
 - **Validates**: Bookworm+; root filesystem is on an `mmcblk*` device; NVMe disk exists.
-- **Prompts for Wi-Fi first (always)**: it asks for SSID/password up front, attempts to connect the *current* system via `nmcli`, and **requires verified internet** before continuing (so package install + image download work).
+- **Prompts for Wi-Fi first (always)**: it asks for SSID/password up front, attempts to connect the *current* system via `nmcli`, and verifies internet reachability. If no internet is detected, you can choose to continue anyway.
+- **Prompts for region + locale**: Wi‑Fi country code, timezone, locale (with defaults and validation).
 - **Installs packages**: `wget`, `xz-utils`, `openssl`, `iw`, `network-manager`, `rpi-eeprom`, etc.
 - **Flashes**: downloads `raspios_lite_arm64_latest` and streams it to the NVMe via `xzcat | dd`.
 - **Configures on the NVMe image**:
@@ -13,7 +14,13 @@ Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while bo
   - creates user/password (writes `userconf.txt` on the boot partition)
   - configures Wi-Fi for the installed NVMe OS (creates a NetworkManager `*.nmconnection` profile in the NVMe **rootfs**)
   - prompts for a **hostname** and writes it into the NVMe rootfs (`/etc/hostname` + `/etc/hosts`)
-  - ensures `dtparam=pciex1=on` in NVMe `config.txt` (if present)
+  - sets timezone + locale (and keyboard layout for US/GB)
+  - ensures `dtparam=pciex1=on` and `dtparam=ant2` in NVMe `config.txt` (if present)
+  - disables camera auto‑detect and applies `dtoverlay=imx708`
+  - propagates display rotation if the current system uses a `video=...rotate=180` kernel arg
+  - copies `/etc/udev/rules.d/99-touchscreen-rotate.rules` if present
+  - expands the NVMe rootfs to fill the disk
+- **Updates NVMe OS packages** (in chroot): full upgrade, installs dev tools + `libcamera-apps`, disables bluetooth.
 - **Sets EEPROM boot order**: best-effort non-interactive edit to `BOOT_ORDER=0xf416` and `PCIE_PROBE=1`.
 - **Reboots**.
 
@@ -28,11 +35,13 @@ sudo ./provision_nvme_from_emmc.sh
 You will be prompted to:
 
 - enter Wi-Fi SSID/password (used to connect the current system; then also applied to the NVMe OS)
-- enter Wi-Fi country code (2 letters, e.g. `US`, `CA`, `GB`, `DE`, `FR`, `JP`) to avoid rfkill block warning on first boot
+- enter Wi-Fi country code (2 letters, e.g. `US`, `CA`, `GB`, `DE`, `FR`, `JP`) to avoid rfkill block warning on first boot (default `US`)
+- enter timezone (default `America/New_York`)
+- enter locale (e.g. `en_us`, `en_gb`, `fr_fr`)
+- enter hostname (defaults to current system hostname)
+- enter a username/password for first boot
 - choose the NVMe disk (if there are multiple)
 - type **`ERASE`** to confirm destroying that disk
-- enter desired **hostname**
-- enter a username/password for first boot
 
 ## Notes / caveats
 
@@ -45,7 +54,10 @@ You will be prompted to:
 
 - downloads `raspios_arm64_latest` and flashes it to eMMC
 - creates the default `provision/provision` user
+- enables SSH on first boot
 - enables passwordless sudo for that user
+- prompts for a hostname and writes it to the eMMC rootfs
+- sets `dtparam=pciex1=on` and `dtparam=ant2`
 - clones `https://github.com/ryanmillerwork/homebase_setup` onto the eMMC image
 - sets desktop autostart to run `sudo ./provision_nvme_from_emmc.sh` in a terminal on every boot
 
