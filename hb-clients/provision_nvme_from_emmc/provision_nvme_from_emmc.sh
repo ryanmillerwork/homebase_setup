@@ -996,7 +996,7 @@ configure_nvme_packages_and_services() {
   chroot "$root_mnt" /bin/bash -lc 'apt update && apt full-upgrade -y && apt clean' \
     || die "Failed to run apt update/full-upgrade in NVMe rootfs."
 
-  chroot "$root_mnt" /bin/bash -lc 'apt install -y build-essential cmake libevdev-dev libpq-dev libcamera-apps' \
+  chroot "$root_mnt" /bin/bash -lc 'apt install -y build-essential cmake libevdev-dev libpq-dev libcamera-apps screen' \
     || die "Failed to install dev packages in NVMe rootfs."
 
   chroot "$root_mnt" /bin/bash -lc 'systemctl disable bluetooth && systemctl stop bluetooth' \
