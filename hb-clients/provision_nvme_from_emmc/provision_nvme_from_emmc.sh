@@ -507,6 +507,26 @@ wait_for_partitions() {
   die "Timed out waiting for partitions to appear on $dev"
 }
 
+expand_nvme_root_partition() {
+  local dev="$1"
+  local root_part="$2"
+  need_cmd parted
+  need_cmd partprobe
+  need_cmd udevadm
+  need_cmd e2fsck
+  need_cmd resize2fs
+
+  log "Expanding NVMe root partition to fill disk..."
+  # Resize partition 2 to the end of the disk.
+  parted -s "$dev" resizepart 2 100% || die "Failed to resize partition 2 on $dev"
+  partprobe "$dev" || true
+  udevadm settle || true
+
+  # Resize filesystem to match the new partition size.
+  e2fsck -fy "$root_part" || die "Filesystem check failed on $root_part"
+  resize2fs "$root_part" || die "Failed to resize filesystem on $root_part"
+}
+
 fsck_nvme_partitions() {
   local boot_part="$1"
   local root_part="$2"
@@ -1214,6 +1234,7 @@ main() {
   log "NVMe boot partition: $boot_part"
   log "NVMe root partition: $root_part"
 
+  expand_nvme_root_partition "$nvme_dev" "$root_part"
   fsck_nvme_partitions "$boot_part" "$root_part"
 
   HB_BOOT_MNT="/mnt/hb_nvme_boot"
