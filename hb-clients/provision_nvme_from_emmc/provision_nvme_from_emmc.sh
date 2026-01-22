@@ -507,6 +507,22 @@ wait_for_partitions() {
   die "Timed out waiting for partitions to appear on $dev"
 }
 
+fsck_nvme_partitions() {
+  local boot_part="$1"
+  local root_part="$2"
+  # Ensure the filesystems are clean before mounting.
+  if [[ -b "$root_part" ]]; then
+    if command -v e2fsck >/dev/null 2>&1; then
+      e2fsck -fy "$root_part" >/dev/null 2>&1 || die "Filesystem check failed on $root_part"
+    fi
+  fi
+  if [[ -b "$boot_part" ]]; then
+    if command -v fsck.vfat >/dev/null 2>&1; then
+      fsck.vfat -a "$boot_part" >/dev/null 2>&1 || true
+    fi
+  fi
+}
+
 find_nvme_partition() {
   local dev="$1"
   local want="$2" # "boot" or "root"
@@ -1197,6 +1213,8 @@ main() {
 
   log "NVMe boot partition: $boot_part"
   log "NVMe root partition: $root_part"
+
+  fsck_nvme_partitions "$boot_part" "$root_part"
 
   HB_BOOT_MNT="/mnt/hb_nvme_boot"
   HB_ROOT_MNT="/mnt/hb_nvme_root"
