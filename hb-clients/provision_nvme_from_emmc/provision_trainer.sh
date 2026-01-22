@@ -179,6 +179,16 @@ install_dserv_latest() {
     chown _apt:root "$deb_path" || true
   fi
   apt-get install -y "$deb_path"
+
+  if ! command -v dserv >/dev/null 2>&1; then
+    if [[ -x /usr/local/dserv/dserv ]]; then
+      ln -sf /usr/local/dserv/dserv /usr/local/bin/dserv
+    elif [[ -x /usr/bin/dserv ]]; then
+      ln -sf /usr/bin/dserv /usr/local/bin/dserv
+    else
+      log "WARNING: dserv binary not found in expected locations; check dpkg -L dserv"
+    fi
+  fi
 }
 
 install_dlsh_latest() {
