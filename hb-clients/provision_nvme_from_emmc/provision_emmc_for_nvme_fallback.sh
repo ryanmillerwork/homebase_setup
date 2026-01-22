@@ -567,6 +567,9 @@ write_emmc_config() {
   pw_hash="$(openssl passwd -6 "$password")"
   printf '%s:%s\n' "$username" "$pw_hash" > "${boot_mnt}/userconf.txt"
 
+  # Enable SSH on first boot.
+  : > "${boot_mnt}/ssh"
+
   # Optionally set 180-degree rotation via KMS cmdline (HDMI-A-1).
   # Use an explicit mode because some panels ignore rotate without it.
   local cmdline_rotate=""
@@ -599,6 +602,13 @@ write_emmc_config() {
     fi
   else
     log "WARNING: Did not find config.txt on boot partition ($cfg)."
+  fi
+
+  # Prefer antenna 2 if supported.
+  if [[ -f "$cfg" ]]; then
+    if ! grep -qE '^\s*dtparam=ant2\s*$' "$cfg"; then
+      echo "dtparam=ant2" >> "$cfg"
+    fi
   fi
 
   # Passwordless sudo for provision user.

@@ -600,8 +600,8 @@ prompt_timezone() {
   # Timezone in Region/City format, e.g. America/Los_Angeles.
   local tz
   while true; do
-    read -r -p "Enter timezone for NVMe OS (e.g. America/New_York, America/Los_Angeles, Europe/London, Asia/Tokyo). Default: UTC. Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones : " tz
-    tz="${tz:-UTC}"
+    read -r -p "Enter timezone for NVMe OS (e.g. America/New_York, America/Los_Angeles, Europe/London, Asia/Tokyo). Default: America/New_York. Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones : " tz
+    tz="${tz:-America/New_York}"
     if [[ -f "/usr/share/zoneinfo/${tz}" ]]; then
       echo "$tz"
       return 0
@@ -912,14 +912,6 @@ EOF
     # Only enable the selected locale to avoid mixed defaults (e.g., en_GB vs en_US).
     echo "${locale} UTF-8" > "$locale_gen"
     echo "LANG=${locale}" > "${root_mnt}/etc/default/locale"
-    # Generate locales in the target rootfs (best-effort).
-    if [[ -x "${root_mnt}/usr/sbin/locale-gen" ]]; then
-      if ! chroot "$root_mnt" /usr/sbin/locale-gen "$locale" >/dev/null 2>&1; then
-        log "WARNING: Failed to run locale-gen in target rootfs; locale may be missing."
-      fi
-    else
-      log "WARNING: locale-gen not found in target rootfs; locale may be missing."
-    fi
   fi
 
   # Keyboard layout: align with locale country (best-effort).
@@ -989,15 +981,26 @@ unmount_chroot_env() {
 
 configure_nvme_packages_and_services() {
   local root_mnt="$1"
+  local locale="$2"
   log "Configuring packages/services in NVMe OS (apt upgrade, dev packages, disable bluetooth)..."
   mount_chroot_env "$root_mnt"
   trap 'unmount_chroot_env "'"$root_mnt"'"' RETURN
 
-  chroot "$root_mnt" /bin/bash -lc 'apt update && apt full-upgrade -y && apt clean' \
-    || die "Failed to run apt update/full-upgrade in NVMe rootfs."
+  if ! chroot "$root_mnt" /bin/bash -lc 'DEBIAN_FRONTEND=noninteractive apt-get update && apt-get -y full-upgrade && apt-get -y clean'; then
+    log "WARNING: apt full-upgrade failed in NVMe rootfs. Attempting recovery..."
+    chroot "$root_mnt" /bin/bash -lc 'DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true'
+    chroot "$root_mnt" /bin/bash -lc 'DEBIAN_FRONTEND=noninteractive apt-get -y -f install || true'
+    chroot "$root_mnt" /bin/bash -lc 'DEBIAN_FRONTEND=noninteractive apt-get update && apt-get -y full-upgrade && apt-get -y clean' \
+      || die "Failed to run apt update/full-upgrade in NVMe rootfs."
+  fi
 
-  chroot "$root_mnt" /bin/bash -lc 'apt install -y build-essential cmake libevdev-dev libpq-dev libcamera-apps screen git' \
-    || die "Failed to install dev packages in NVMe rootfs."
+  chroot "$root_mnt" /bin/bash -lc 'DEBIAN_FRONTEND=noninteractive apt-get install -y locales build-essential cmake libevdev-dev libpq-dev libcamera-apps screen git' \
+    || die "Failed to install packages in NVMe rootfs."
+
+  if [[ -n "$locale" ]]; then
+    chroot "$root_mnt" /bin/bash -lc "locale-gen '$locale' && update-locale LANG='$locale'" \
+      || log "WARNING: Failed to generate locale '$locale' in NVMe rootfs."
+  fi
 
   chroot "$root_mnt" /bin/bash -lc 'systemctl disable bluetooth && systemctl stop bluetooth' \
     || die "Failed to disable bluetooth in NVMe rootfs."
@@ -1156,7 +1159,7 @@ main() {
 
   write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country" "$timezone" "$locale"
 
-  configure_nvme_packages_and_services "$HB_ROOT_MNT"
+  configure_nvme_packages_and_services "$HB_ROOT_MNT" "$locale"
 
   cleanup_mounts "$HB_BOOT_MNT" "$HB_ROOT_MNT"
   trap - EXIT
