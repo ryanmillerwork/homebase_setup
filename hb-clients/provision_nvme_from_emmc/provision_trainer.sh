@@ -50,24 +50,43 @@ check_trixie_or_later() {
 }
 
 install_stim2_latest() {
-  local tmp_dir url deb_path
+  local tmp_dir url deb_path arch
   tmp_dir="$(mktemp -d)"
-  deb_path="$tmp_dir/stim2_latest_arm64.deb"
+  trap 'rm -rf "$tmp_dir"' RETURN
 
-  url="$(
-    wget -qO- https://api.github.com/repos/SheinbergLab/stim2/releases/latest \
-      | grep -m 1 '"browser_download_url":.*arm64\.deb"' \
-      | cut -d '"' -f 4
-  )"
+  arch="$(dpkg --print-architecture)"
+  case "$arch" in
+    arm64)
+      deb_path="$tmp_dir/stim2_latest_arm64.deb"
+      url="$(
+        wget -qO- https://api.github.com/repos/SheinbergLab/stim2/releases/latest \
+          | grep -m 1 '"browser_download_url":.*arm64\.deb"' \
+          | cut -d '"' -f 4
+      )"
+      ;;
+    *)
+      die "Unsupported architecture '$arch' (stim2 release .deb expected for arm64)"
+      ;;
+  esac
 
-  [[ -n "$url" ]] || die "Could not find stim2 arm64 .deb in latest release"
+  [[ -n "$url" ]] || die "Could not find stim2 .deb in latest release"
 
   log "Downloading stim2 from $url"
   wget -O "$deb_path" "$url"
   apt-get install -y "$deb_path"
+
+  if ! command -v stim2 >/dev/null 2>&1; then
+    if [[ -x /usr/local/stim2/stim2 ]]; then
+      ln -sf /usr/local/stim2/stim2 /usr/local/bin/stim2
+    else
+      die "stim2 binary not found after install"
+    fi
+  fi
 }
 
 write_stim2_service() {
+  [[ -x /usr/local/stim2/stim2 ]] || die "stim2 binary missing at /usr/local/stim2/stim2"
+
   cat >/etc/systemd/system/stim2.service <<'EOF'
 [Unit]
 Description=Stim2 Stimulus Presentation
