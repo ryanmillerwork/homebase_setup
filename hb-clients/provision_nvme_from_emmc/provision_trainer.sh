@@ -58,10 +58,17 @@ install_stim2_latest() {
   case "$arch" in
     arm64)
       deb_path="$tmp_dir/stim2_latest_arm64.deb"
+      release_json="$(wget -qO- https://api.github.com/repos/SheinbergLab/stim2/releases/latest || true)"
+      if [[ -z "$release_json" ]]; then
+        die "Failed to fetch stim2 release metadata from GitHub API"
+      fi
+      if echo "$release_json" | grep -q "API rate limit exceeded"; then
+        die "GitHub API rate limit exceeded; try again later or use a cached .deb"
+      fi
       url="$(
-        wget -qO- https://api.github.com/repos/SheinbergLab/stim2/releases/latest \
+        echo "$release_json" \
           | grep -m 1 '"browser_download_url":.*arm64\.deb"' \
-          | cut -d '"' -f 4
+          | cut -d '"' -f 4 || true
       )"
       ;;
     *)
