@@ -11,6 +11,10 @@ MONITOR_WIDTH_CM="$MONITOR_WIDTH_CM_DEFAULT"
 MONITOR_HEIGHT_CM="$MONITOR_HEIGHT_CM_DEFAULT"
 MONITOR_DISTANCE_CM="$MONITOR_DISTANCE_CM_DEFAULT"
 
+RUN_USER=""
+RUN_UID=""
+RUN_HOME=""
+
 log() {
   echo "$@" >&2
 }
@@ -55,6 +59,25 @@ check_trixie_or_later() {
       log "WARNING: Expected Raspberry Pi OS Trixie or later, got VERSION_CODENAME='$codename'"
       ;;
   esac
+}
+
+detect_run_user() {
+  if [[ -n "$RUN_USER" ]]; then
+    return 0
+  fi
+
+  RUN_USER="${SUDO_USER:-}"
+  if [[ -z "$RUN_USER" || "$RUN_USER" == "root" ]]; then
+    RUN_USER="$(id -un 1000 2>/dev/null || true)"
+  fi
+  if [[ -z "$RUN_USER" || "$RUN_USER" == "root" ]]; then
+    RUN_USER="lab"
+  fi
+  RUN_UID="$(id -u "$RUN_USER" 2>/dev/null || true)"
+  RUN_HOME="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+
+  [[ -n "$RUN_UID" ]] || die "Could not determine UID for user '$RUN_USER'"
+  [[ -n "$RUN_HOME" ]] || RUN_HOME="/home/${RUN_USER}"
 }
 
 prompt_monitor_settings() {
@@ -218,18 +241,29 @@ install_dlsh_latest() {
   wget -O "${target_dir}/${filename}" "$url"
 }
 
+install_ess_repo() {
+  local systems_dir
+  detect_run_user
+
+  systems_dir="${RUN_HOME}/systems"
+  if [[ ! -d "${systems_dir}/ess" ]]; then
+    mkdir -p "$systems_dir"
+    log "Cloning ess into ${systems_dir}/ess"
+    git -C "$systems_dir" clone https://github.com/homebase-sheinberg/ess.git
+  else
+    log "ess repo already present at ${systems_dir}/ess"
+  fi
+
+  git config --system --add safe.directory "${systems_dir}/ess"
+  mkdir -p /usr/local/dserv/local
+  echo "set env(ESS_SYSTEM_PATH) ${systems_dir}" | tee -a /usr/local/dserv/local/pre-systemdir.tcl >/dev/null
+}
+
 write_stim2_service() {
-  local stim2_bin cage_bin run_user run_uid
+  local stim2_bin cage_bin
+  detect_run_user
   stim2_bin="$(command -v stim2 || true)"
   cage_bin="$(command -v cage || true)"
-  run_user="${SUDO_USER:-}"
-  if [[ -z "$run_user" || "$run_user" == "root" ]]; then
-    run_user="$(id -un 1000 2>/dev/null || true)"
-  fi
-  if [[ -z "$run_user" || "$run_user" == "root" ]]; then
-    run_user="lab"
-  fi
-  run_uid="$(id -u "$run_user" 2>/dev/null || true)"
 
   if [[ -z "$stim2_bin" && -x /usr/local/stim2/stim2 ]]; then
     stim2_bin="/usr/local/stim2/stim2"
@@ -237,7 +271,6 @@ write_stim2_service() {
 
   [[ -x "$stim2_bin" ]] || die "stim2 binary missing (expected in PATH or /usr/local/stim2/stim2)"
   [[ -x "$cage_bin" ]] || die "cage binary missing from PATH"
-  [[ -n "$run_uid" ]] || die "Could not determine UID for user '$run_user'"
 
   cat >/etc/systemd/system/stim2.service <<EOF
 [Unit]
@@ -247,8 +280,8 @@ Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
-User=${run_user}
-Environment=XDG_RUNTIME_DIR=/run/user/${run_uid}
+User=${RUN_USER}
+Environment=XDG_RUNTIME_DIR=/run/user/${RUN_UID}
 PAMName=login
 TTYPath=/dev/tty1
 TTYReset=yes
@@ -267,6 +300,39 @@ EOF
   systemctl daemon-reload
   systemctl enable stim2.service
   systemctl restart stim2.service || true
+}
+
+write_dserv_service() {
+  local dserv_bin
+  detect_run_user
+  dserv_bin="$(command -v dserv || true)"
+
+  if [[ -z "$dserv_bin" && -x /usr/local/dserv/dserv ]]; then
+    dserv_bin="/usr/local/dserv/dserv"
+  fi
+
+  [[ -x "$dserv_bin" ]] || die "dserv binary missing (expected in PATH or /usr/local/dserv/dserv)"
+
+  cat >/etc/systemd/system/dserv.service <<EOF
+[Unit]
+Description=dserv Data Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${RUN_USER}
+ExecStart=${dserv_bin}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable dserv.service
+  systemctl restart dserv.service || true
 }
 
 configure_raspi_config() {
@@ -293,7 +359,7 @@ main() {
 
   log "Installing dependencies..."
   apt-get update
-  apt-get install -y ca-certificates wget cage labwc libtcl9.0
+  apt-get install -y ca-certificates wget cage labwc libtcl9.0 git
 
   log "Installing stim2..."
   install_stim2_latest
@@ -304,11 +370,17 @@ main() {
   log "Downloading dlsh archive..."
   install_dlsh_latest
 
+  log "Installing ess repo and dserv system path..."
+  install_ess_repo
+
   log "Writing stim2 monitor configuration..."
   write_monitor_tcl
 
   log "Configuring stim2 systemd service..."
   write_stim2_service
+
+  log "Configuring dserv systemd service..."
+  write_dserv_service
 
   log "Applying kiosk-style boot settings..."
   configure_raspi_config
