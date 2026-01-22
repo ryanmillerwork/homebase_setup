@@ -986,24 +986,25 @@ configure_nvme_packages_and_services() {
   log "Configuring packages/services in NVMe OS (apt upgrade, dev packages, disable bluetooth)..."
   mount_chroot_env "$root_mnt"
   trap 'unmount_chroot_env "'"$root_mnt"'"' RETURN
+  local chroot_env=(/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root)
 
-  if ! chroot "$root_mnt" /bin/bash -c 'DEBIAN_FRONTEND=noninteractive apt-get update && apt-get -y full-upgrade && apt-get -y clean'; then
+  if ! chroot "$root_mnt" "${chroot_env[@]}" DEBIAN_FRONTEND=noninteractive /bin/bash -c 'apt-get update && apt-get -y full-upgrade && apt-get -y clean'; then
     log "WARNING: apt full-upgrade failed in NVMe rootfs. Attempting recovery..."
-    chroot "$root_mnt" /bin/bash -c 'DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true'
-    chroot "$root_mnt" /bin/bash -c 'DEBIAN_FRONTEND=noninteractive apt-get -y -f install || true'
-    chroot "$root_mnt" /bin/bash -c 'DEBIAN_FRONTEND=noninteractive apt-get update && apt-get -y full-upgrade && apt-get -y clean' \
+    chroot "$root_mnt" "${chroot_env[@]}" DEBIAN_FRONTEND=noninteractive /bin/bash -c 'dpkg --configure -a || true'
+    chroot "$root_mnt" "${chroot_env[@]}" DEBIAN_FRONTEND=noninteractive /bin/bash -c 'apt-get -y -f install || true'
+    chroot "$root_mnt" "${chroot_env[@]}" DEBIAN_FRONTEND=noninteractive /bin/bash -c 'apt-get update && apt-get -y full-upgrade && apt-get -y clean' \
       || die "Failed to run apt update/full-upgrade in NVMe rootfs."
   fi
 
-  chroot "$root_mnt" /bin/bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y locales build-essential cmake libevdev-dev libpq-dev libcamera-apps screen git' \
+  chroot "$root_mnt" "${chroot_env[@]}" DEBIAN_FRONTEND=noninteractive /bin/bash -c 'apt-get install -y locales build-essential cmake libevdev-dev libpq-dev libcamera-apps screen git' \
     || die "Failed to install packages in NVMe rootfs."
 
   if [[ -n "$locale" ]]; then
-    chroot "$root_mnt" /bin/bash -c "locale-gen '$locale' && update-locale LANG='$locale'" \
+    chroot "$root_mnt" "${chroot_env[@]}" /bin/bash -c "locale-gen '$locale' && update-locale LANG='$locale'" \
       || log "WARNING: Failed to generate locale '$locale' in NVMe rootfs."
   fi
 
-  chroot "$root_mnt" /bin/bash -c 'systemctl disable bluetooth && systemctl stop bluetooth' \
+  chroot "$root_mnt" "${chroot_env[@]}" /bin/bash -c 'systemctl disable bluetooth && systemctl stop bluetooth' \
     || die "Failed to disable bluetooth in NVMe rootfs."
 
   unmount_chroot_env "$root_mnt"
