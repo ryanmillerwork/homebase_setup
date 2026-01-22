@@ -100,16 +100,25 @@ install_stim2_latest() {
 }
 
 write_stim2_service() {
-  [[ -x /usr/local/stim2/stim2 ]] || die "stim2 binary missing at /usr/local/stim2/stim2"
+  local stim2_bin cage_bin
+  stim2_bin="$(command -v stim2 || true)"
+  cage_bin="$(command -v cage || true)"
 
-  cat >/etc/systemd/system/stim2.service <<'EOF'
+  if [[ -z "$stim2_bin" && -x /usr/local/stim2/stim2 ]]; then
+    stim2_bin="/usr/local/stim2/stim2"
+  fi
+
+  [[ -x "$stim2_bin" ]] || die "stim2 binary missing (expected in PATH or /usr/local/stim2/stim2)"
+  [[ -x "$cage_bin" ]] || die "cage binary missing from PATH"
+
+  cat >/etc/systemd/system/stim2.service <<EOF
 [Unit]
 Description=Stim2 Stimulus Presentation
 
 [Service]
 Type=simple
 Environment=XDG_RUNTIME_DIR=/tmp
-ExecStart=/usr/bin/cage -- /usr/local/stim2/stim2 -F -f /usr/local/stim2/config/linux.cfg
+ExecStart=${cage_bin} -- ${stim2_bin} -F -f /usr/local/stim2/config/linux.cfg
 Restart=always
 RestartSec=5
 CPUSchedulingPolicy=fifo
@@ -121,6 +130,7 @@ EOF
 
   systemctl daemon-reload
   systemctl enable stim2.service
+  systemctl restart stim2.service || true
 }
 
 configure_raspi_config() {
