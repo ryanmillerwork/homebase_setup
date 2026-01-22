@@ -586,7 +586,8 @@ prompt_wifi_country() {
   # Two-letter ISO 3166-1 alpha-2 country code, e.g. US, GB, DE.
   local cc
   while true; do
-    read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP): " cc
+    read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP). Default: US: " cc
+    cc="${cc:-US}"
     cc="${cc^^}"
     if [[ "$cc" =~ ^[A-Z]{2}$ ]]; then
       echo "$cc"
@@ -986,23 +987,23 @@ configure_nvme_packages_and_services() {
   mount_chroot_env "$root_mnt"
   trap 'unmount_chroot_env "'"$root_mnt"'"' RETURN
 
-  if ! chroot "$root_mnt" /bin/bash -lc 'DEBIAN_FRONTEND=noninteractive apt-get update && apt-get -y full-upgrade && apt-get -y clean'; then
+  if ! chroot "$root_mnt" /bin/bash -c 'DEBIAN_FRONTEND=noninteractive apt-get update && apt-get -y full-upgrade && apt-get -y clean'; then
     log "WARNING: apt full-upgrade failed in NVMe rootfs. Attempting recovery..."
-    chroot "$root_mnt" /bin/bash -lc 'DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true'
-    chroot "$root_mnt" /bin/bash -lc 'DEBIAN_FRONTEND=noninteractive apt-get -y -f install || true'
-    chroot "$root_mnt" /bin/bash -lc 'DEBIAN_FRONTEND=noninteractive apt-get update && apt-get -y full-upgrade && apt-get -y clean' \
+    chroot "$root_mnt" /bin/bash -c 'DEBIAN_FRONTEND=noninteractive dpkg --configure -a || true'
+    chroot "$root_mnt" /bin/bash -c 'DEBIAN_FRONTEND=noninteractive apt-get -y -f install || true'
+    chroot "$root_mnt" /bin/bash -c 'DEBIAN_FRONTEND=noninteractive apt-get update && apt-get -y full-upgrade && apt-get -y clean' \
       || die "Failed to run apt update/full-upgrade in NVMe rootfs."
   fi
 
-  chroot "$root_mnt" /bin/bash -lc 'DEBIAN_FRONTEND=noninteractive apt-get install -y locales build-essential cmake libevdev-dev libpq-dev libcamera-apps screen git' \
+  chroot "$root_mnt" /bin/bash -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y locales build-essential cmake libevdev-dev libpq-dev libcamera-apps screen git' \
     || die "Failed to install packages in NVMe rootfs."
 
   if [[ -n "$locale" ]]; then
-    chroot "$root_mnt" /bin/bash -lc "locale-gen '$locale' && update-locale LANG='$locale'" \
+    chroot "$root_mnt" /bin/bash -c "locale-gen '$locale' && update-locale LANG='$locale'" \
       || log "WARNING: Failed to generate locale '$locale' in NVMe rootfs."
   fi
 
-  chroot "$root_mnt" /bin/bash -lc 'systemctl disable bluetooth && systemctl stop bluetooth' \
+  chroot "$root_mnt" /bin/bash -c 'systemctl disable bluetooth && systemctl stop bluetooth' \
     || die "Failed to disable bluetooth in NVMe rootfs."
 
   unmount_chroot_env "$root_mnt"
@@ -1117,6 +1118,15 @@ main() {
   # If they skipped Wi-Fi, they might be on ethernet; allow that.
   log "Internet connectivity verified."
 
+  local hostname
+  hostname="$(prompt_hostname)"
+
+  local username password
+  {
+    read -r username
+    read -r password
+  } < <(prompt_username_password)
+
   check_bookworm_or_later
   check_root_on_emmc_and_nvme_present
 
@@ -1125,9 +1135,6 @@ main() {
   [[ -b "$nvme_dev" ]] || die "Not a block device: $nvme_dev"
 
   confirm_erase_device "$nvme_dev"
-
-  local hostname
-  hostname="$(prompt_hostname)"
 
   install_packages
 
@@ -1150,12 +1157,6 @@ main() {
   HB_ROOT_MNT="/mnt/hb_nvme_root"
   trap 'cleanup_mounts "${HB_BOOT_MNT:-}" "${HB_ROOT_MNT:-}"' EXIT
   mount_nvme_partitions_for_config "$boot_part" "$root_part" "$HB_BOOT_MNT" "$HB_ROOT_MNT"
-
-  local username password
-  {
-    read -r username
-    read -r password
-  } < <(prompt_username_password)
 
   write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country" "$timezone" "$locale"
 
