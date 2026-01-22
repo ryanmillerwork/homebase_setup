@@ -56,7 +56,10 @@ You will be prompted to:
 - downloads the latest `stim2` arm64 `.deb` from GitHub releases and installs it
 - ensures `stim2` is on `PATH` (`/usr/local/bin/stim2` symlink if needed)
 - prompts for monitor geometry and writes `/usr/local/stim2/local/monitor.tcl`
-- writes and enables a `stim2` systemd service that launches Cage + stim2 on `tty1`
+- installs and enables systemd services from vendor packages:
+  - `/usr/local/stim2/systemd/stim2.service`
+  - `/usr/local/dserv/systemd/dserv.service`
+  - `/usr/local/dserv/systemd/dserv-agent.service`
 - applies kiosk-style boot settings via `raspi-config` (console autologin + Wayland/labwc where supported)
 
 Run it on the target Pi:

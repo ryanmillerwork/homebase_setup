@@ -259,80 +259,17 @@ install_ess_repo() {
   echo "set env(ESS_SYSTEM_PATH) ${systems_dir}" | tee -a /usr/local/dserv/local/pre-systemdir.tcl >/dev/null
 }
 
-write_stim2_service() {
-  local stim2_bin cage_bin
-  detect_run_user
-  stim2_bin="$(command -v stim2 || true)"
-  cage_bin="$(command -v cage || true)"
+install_systemd_service() {
+  local source_service="$1"
+  local service_name
 
-  if [[ -z "$stim2_bin" && -x /usr/local/stim2/stim2 ]]; then
-    stim2_bin="/usr/local/stim2/stim2"
-  fi
+  [[ -f "$source_service" ]] || die "Missing service file: $source_service"
+  service_name="$(basename "$source_service")"
 
-  [[ -x "$stim2_bin" ]] || die "stim2 binary missing (expected in PATH or /usr/local/stim2/stim2)"
-  [[ -x "$cage_bin" ]] || die "cage binary missing from PATH"
-
-  cat >/etc/systemd/system/stim2.service <<EOF
-[Unit]
-Description=Stim2 Stimulus Presentation
-After=systemd-user-sessions.service
-Conflicts=getty@tty1.service
-
-[Service]
-Type=simple
-User=${RUN_USER}
-Environment=XDG_RUNTIME_DIR=/run/user/${RUN_UID}
-PAMName=login
-TTYPath=/dev/tty1
-TTYReset=yes
-TTYVHangup=yes
-StandardInput=tty
-ExecStart=${cage_bin} -- ${stim2_bin} -F -f /usr/local/stim2/config/linux.cfg
-Restart=always
-RestartSec=5
-CPUSchedulingPolicy=fifo
-CPUSchedulingPriority=50
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
+  install -m 0644 "$source_service" "/etc/systemd/system/${service_name}"
   systemctl daemon-reload
-  systemctl enable stim2.service
-  systemctl restart stim2.service || true
-}
-
-write_dserv_service() {
-  local dserv_bin
-  detect_run_user
-  dserv_bin="$(command -v dserv || true)"
-
-  if [[ -z "$dserv_bin" && -x /usr/local/dserv/dserv ]]; then
-    dserv_bin="/usr/local/dserv/dserv"
-  fi
-
-  [[ -x "$dserv_bin" ]] || die "dserv binary missing (expected in PATH or /usr/local/dserv/dserv)"
-
-  cat >/etc/systemd/system/dserv.service <<EOF
-[Unit]
-Description=dserv Data Server
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${RUN_USER}
-ExecStart=${dserv_bin}
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  systemctl daemon-reload
-  systemctl enable dserv.service
-  systemctl restart dserv.service || true
+  systemctl enable "$service_name"
+  systemctl restart "$service_name" || true
 }
 
 configure_raspi_config() {
@@ -377,10 +314,11 @@ main() {
   write_monitor_tcl
 
   log "Configuring stim2 systemd service..."
-  write_stim2_service
+  install_systemd_service /usr/local/stim2/systemd/stim2.service
 
-  log "Configuring dserv systemd service..."
-  write_dserv_service
+  log "Configuring dserv systemd services..."
+  install_systemd_service /usr/local/dserv/systemd/dserv.service
+  install_systemd_service /usr/local/dserv/systemd/dserv-agent.service
 
   log "Applying kiosk-style boot settings..."
   configure_raspi_config
