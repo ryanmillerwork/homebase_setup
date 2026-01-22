@@ -52,7 +52,7 @@ check_trixie_or_later() {
 install_stim2_latest() {
   local tmp_dir url deb_path arch all_debs
   tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' RETURN
+  trap '[[ -n "${tmp_dir:-}" ]] && rm -rf "$tmp_dir"' RETURN
 
   arch="$(dpkg --print-architecture)"
   case "$arch" in
@@ -84,6 +84,10 @@ install_stim2_latest() {
 
   log "Downloading stim2 from $url"
   wget -O "$deb_path" "$url"
+  chmod 0644 "$deb_path"
+  if id _apt >/dev/null 2>&1; then
+    chown _apt:root "$deb_path" || true
+  fi
   apt-get install -y "$deb_path"
 
   if ! command -v stim2 >/dev/null 2>&1; then
@@ -126,7 +130,9 @@ configure_raspi_config() {
   fi
 
   # Boot to console with auto-login.
-  raspi-config nonint do_boot_behaviour B2
+  if ! raspi-config nonint do_boot_behaviour B2; then
+    log "WARNING: raspi-config boot behaviour failed; verify console autologin manually."
+  fi
 
   # Prefer Wayland with labwc (if supported by this raspi-config version).
   if ! raspi-config nonint do_wayland W1; then
