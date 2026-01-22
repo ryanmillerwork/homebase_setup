@@ -100,9 +100,17 @@ install_stim2_latest() {
 }
 
 write_stim2_service() {
-  local stim2_bin cage_bin
+  local stim2_bin cage_bin run_user run_uid
   stim2_bin="$(command -v stim2 || true)"
   cage_bin="$(command -v cage || true)"
+  run_user="${SUDO_USER:-}"
+  if [[ -z "$run_user" || "$run_user" == "root" ]]; then
+    run_user="$(id -un 1000 2>/dev/null || true)"
+  fi
+  if [[ -z "$run_user" || "$run_user" == "root" ]]; then
+    run_user="lab"
+  fi
+  run_uid="$(id -u "$run_user" 2>/dev/null || true)"
 
   if [[ -z "$stim2_bin" && -x /usr/local/stim2/stim2 ]]; then
     stim2_bin="/usr/local/stim2/stim2"
@@ -110,14 +118,23 @@ write_stim2_service() {
 
   [[ -x "$stim2_bin" ]] || die "stim2 binary missing (expected in PATH or /usr/local/stim2/stim2)"
   [[ -x "$cage_bin" ]] || die "cage binary missing from PATH"
+  [[ -n "$run_uid" ]] || die "Could not determine UID for user '$run_user'"
 
   cat >/etc/systemd/system/stim2.service <<EOF
 [Unit]
 Description=Stim2 Stimulus Presentation
+After=systemd-user-sessions.service
+Conflicts=getty@tty1.service
 
 [Service]
 Type=simple
-Environment=XDG_RUNTIME_DIR=/tmp
+User=${run_user}
+Environment=XDG_RUNTIME_DIR=/run/user/${run_uid}
+PAMName=login
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+StandardInput=tty
 ExecStart=${cage_bin} -- ${stim2_bin} -F -f /usr/local/stim2/config/linux.cfg
 Restart=always
 RestartSec=5
@@ -156,7 +173,7 @@ main() {
 
   log "Installing dependencies..."
   apt-get update
-  apt-get install -y ca-certificates wget cage labwc
+  apt-get install -y ca-certificates wget cage labwc libtcl9.0
 
   log "Installing stim2..."
   install_stim2_latest
