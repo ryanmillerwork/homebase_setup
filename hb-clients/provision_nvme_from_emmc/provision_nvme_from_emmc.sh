@@ -13,6 +13,7 @@ set -euo pipefail
 # - Reboot
 
 LOG_PREFIX=""
+HB_WIFI_SCAN_FILE="/tmp/hb_wifi_scan_ssids.txt"
 
 # Used by EXIT trap for cleanup (must not be local vars, because traps can run after scope exits).
 HB_BOOT_MNT=""
@@ -569,9 +570,14 @@ prompt_username_password() {
 }
 
 prompt_hostname() {
-  local hn
+  local hn default_hn="${1:-}"
   while true; do
-    read -r -p "Enter desired hostname for the NVMe OS: " hn
+    if [[ -n "$default_hn" ]]; then
+      read -r -p "Enter desired hostname for the NVMe OS (default: ${default_hn}): " hn
+      hn="${hn:-$default_hn}"
+    else
+      read -r -p "Enter desired hostname for the NVMe OS: " hn
+    fi
     hn="${hn,,}"
     # Basic hostname validation: 1-63 chars, [a-z0-9-], no leading/trailing '-', no consecutive dots (we disallow dots).
     if [[ "$hn" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
@@ -632,6 +638,10 @@ prompt_locale() {
 }
 
 wifi_scan_ssids() {
+  if [[ -n "${HB_WIFI_SCAN_FILE:-}" && -s "$HB_WIFI_SCAN_FILE" ]]; then
+    cat "$HB_WIFI_SCAN_FILE"
+    return 0
+  fi
   local ssids=""
   if command -v nmcli >/dev/null 2>&1; then
     # Try hard to get a scan result. This is safe even if Wi‑Fi is already up.
@@ -659,6 +669,22 @@ wifi_scan_ssids() {
     fi
   fi
   echo "$ssids"
+}
+
+start_wifi_scan_background() {
+  have_cmd nmcli || return 0
+  local out="${HB_WIFI_SCAN_FILE:-/tmp/hb_wifi_scan_ssids.txt}"
+  rm -f "$out" 2>/dev/null || true
+  (
+    nmcli radio wifi on >/dev/null 2>&1 || true
+    nmcli dev wifi rescan >/dev/null 2>&1 || true
+    sleep 2
+    nmcli -t -f SSID dev wifi list --rescan yes 2>/dev/null \
+      | sed '/^$/d' \
+      | sort -u \
+      > "$out" \
+      || true
+  ) >/dev/null 2>&1 &
 }
 
 prompt_wifi() {
@@ -1066,6 +1092,7 @@ main() {
   # Always prompt for Wi-Fi first, then verify internet before we do any installs/downloads.
   local wifi_ssid="" wifi_pass=""
   log "Starting Wi-Fi selection (needed for downloads unless you already have internet via ethernet)."
+  start_wifi_scan_background
 
   local wifi_country
   wifi_country="$(prompt_wifi_country)"
@@ -1119,8 +1146,12 @@ main() {
   # If they skipped Wi-Fi, they might be on ethernet; allow that.
   log "Internet connectivity verified."
 
+  local default_hostname=""
+  if [[ -r /etc/hostname ]]; then
+    default_hostname="$(cat /etc/hostname 2>/dev/null || true)"
+  fi
   local hostname
-  hostname="$(prompt_hostname)"
+  hostname="$(prompt_hostname "$default_hostname")"
 
   local username password
   {

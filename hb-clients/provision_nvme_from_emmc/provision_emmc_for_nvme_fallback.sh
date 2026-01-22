@@ -242,6 +242,19 @@ prompt_wifi() {
   echo "$pass"
 }
 
+prompt_hostname_emmc() {
+  local hn
+  while true; do
+    read -r -p "Enter desired hostname for the eMMC OS: " hn
+    hn="${hn,,}"
+    if [[ "$hn" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+      echo "$hn"
+      return 0
+    fi
+    log "Invalid hostname '$hn' (use a-z, 0-9, and '-', max 63 chars)."
+  done
+}
+
 root_source() {
   need_cmd findmnt
   local src
@@ -556,6 +569,7 @@ EOF
 write_emmc_config() {
   local boot_mnt="$1"
   local root_mnt="$2"
+  local hostname="$3"
 
   log "Configuring eMMC OS (user/autostart/sudo)..."
 
@@ -656,6 +670,20 @@ EOF
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="0eef", ATTRS{idProduct}=="c002", ENV{LIBINPUT_CALIBRATION_MATRIX}="-1 0 1 0 -1 1"
 EOF
   fi
+
+  # Hostname for the installed system.
+  if [[ -n "$hostname" ]]; then
+    echo "$hostname" > "${root_mnt}/etc/hostname"
+    if [[ -f "${root_mnt}/etc/hosts" ]]; then
+      if grep -qE '^\s*127\.0\.1\.1\s+' "${root_mnt}/etc/hosts"; then
+        sed -i -E "s/^\s*127\.0\.1\.1\s+.*/127.0.1.1\t${hostname}/" "${root_mnt}/etc/hosts"
+      else
+        printf '\n127.0.1.1\t%s\n' "$hostname" >> "${root_mnt}/etc/hosts"
+      fi
+    else
+      log "WARNING: ${root_mnt}/etc/hosts not found; hostname may not fully apply."
+    fi
+  fi
 }
 
 main() {
@@ -720,7 +748,9 @@ main() {
   trap 'cleanup_mounts "${HB_BOOT_MNT:-}" "${HB_ROOT_MNT:-}"' EXIT
   mount_emmc_partitions_for_config "$boot_part" "$root_part" "$HB_BOOT_MNT" "$HB_ROOT_MNT"
 
-  write_emmc_config "$HB_BOOT_MNT" "$HB_ROOT_MNT"
+  local hostname
+  hostname="$(prompt_hostname_emmc)"
+  write_emmc_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$hostname"
 
   cleanup_mounts "$HB_BOOT_MNT" "$HB_ROOT_MNT"
   trap - EXIT
