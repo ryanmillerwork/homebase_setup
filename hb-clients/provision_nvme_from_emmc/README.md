@@ -48,6 +48,23 @@ You will be prompted to:
 - This script is **destructive** to the selected NVMe disk.
 - “Running on eMMC” is checked via `mmcblk*` root device **plus** a heuristic for `/dev/mmcblk*boot0`. If you really are on microSD, the script will ask you to **type `YES`** to proceed.
 
+## stim2 trainer provisioning
+
+`provision_trainer.sh` prepares a fresh **Raspberry Pi OS Trixie Lite** install to boot directly into stim2 in kiosk mode. High‑level steps:
+
+- installs dependencies (`cage`, `labwc`, `libtcl9.0`, `wget`, `ca-certificates`)
+- downloads the latest `stim2` arm64 `.deb` from GitHub releases and installs it
+- ensures `stim2` is on `PATH` (`/usr/local/bin/stim2` symlink if needed)
+- prompts for monitor geometry and writes `/usr/local/stim2/local/monitor.tcl`
+- writes and enables a `stim2` systemd service that launches Cage + stim2 on `tty1`
+- applies kiosk-style boot settings via `raspi-config` (console autologin + Wayland/labwc where supported)
+
+Run it on the target Pi:
+
+```bash
+sudo ./provision_trainer.sh
+```
+
 ## eMMC fallback provisioning
 
 `provision_emmc_for_nvme_fallback.sh` installs the **desktop** Raspberry Pi OS image to eMMC and prepares it to auto-run NVMe provisioning on every boot. It:

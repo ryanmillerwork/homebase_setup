@@ -3,6 +3,14 @@ set -euo pipefail
 
 # Provision a Raspberry Pi OS Trixie Lite system to boot into stim2 in kiosk mode.
 
+MONITOR_WIDTH_CM_DEFAULT="21.7"
+MONITOR_HEIGHT_CM_DEFAULT="13.6"
+MONITOR_DISTANCE_CM_DEFAULT="40.0"
+
+MONITOR_WIDTH_CM="$MONITOR_WIDTH_CM_DEFAULT"
+MONITOR_HEIGHT_CM="$MONITOR_HEIGHT_CM_DEFAULT"
+MONITOR_DISTANCE_CM="$MONITOR_DISTANCE_CM_DEFAULT"
+
 log() {
   echo "$@" >&2
 }
@@ -47,6 +55,41 @@ check_trixie_or_later() {
       log "WARNING: Expected Raspberry Pi OS Trixie or later, got VERSION_CODENAME='$codename'"
       ;;
   esac
+}
+
+prompt_monitor_settings() {
+  local input
+
+  log "Configure stim2 monitor settings (press Enter to accept defaults)."
+
+  read -r -p "Screen width cm [${MONITOR_WIDTH_CM_DEFAULT}]: " input
+  if [[ -n "$input" ]]; then
+    MONITOR_WIDTH_CM="$input"
+  fi
+
+  read -r -p "Screen height cm [${MONITOR_HEIGHT_CM_DEFAULT}]: " input
+  if [[ -n "$input" ]]; then
+    MONITOR_HEIGHT_CM="$input"
+  fi
+
+  read -r -p "Distance to monitor cm [${MONITOR_DISTANCE_CM_DEFAULT}]: " input
+  if [[ -n "$input" ]]; then
+    MONITOR_DISTANCE_CM="$input"
+  fi
+}
+
+write_monitor_tcl() {
+  local monitor_dir monitor_file
+  monitor_dir="/usr/local/stim2/local"
+  monitor_file="${monitor_dir}/monitor.tcl"
+
+  mkdir -p "$monitor_dir"
+  cat >"$monitor_file" <<EOF
+# Monitor-specific settings
+screen_set ScreenWidthCm       ${MONITOR_WIDTH_CM}
+screen_set ScreenHeightCm      ${MONITOR_HEIGHT_CM}
+screen_set DistanceToMonitor   ${MONITOR_DISTANCE_CM}
+EOF
 }
 
 install_stim2_latest() {
@@ -170,6 +213,7 @@ configure_raspi_config() {
 main() {
   require_root
   check_trixie_or_later
+  prompt_monitor_settings
 
   log "Installing dependencies..."
   apt-get update
@@ -177,6 +221,9 @@ main() {
 
   log "Installing stim2..."
   install_stim2_latest
+
+  log "Writing stim2 monitor configuration..."
+  write_monitor_tcl
 
   log "Configuring stim2 systemd service..."
   write_stim2_service
