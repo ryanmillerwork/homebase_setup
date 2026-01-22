@@ -50,7 +50,7 @@ check_trixie_or_later() {
 }
 
 install_stim2_latest() {
-  local tmp_dir url deb_path arch
+  local tmp_dir url deb_path arch all_debs
   tmp_dir="$(mktemp -d)"
   trap 'rm -rf "$tmp_dir"' RETURN
 
@@ -65,11 +65,15 @@ install_stim2_latest() {
       if echo "$release_json" | grep -q "API rate limit exceeded"; then
         die "GitHub API rate limit exceeded; try again later or use a cached .deb"
       fi
-      url="$(
+      all_debs="$(
         echo "$release_json" \
-          | grep -m 1 '"browser_download_url":.*arm64\.deb"' \
-          | cut -d '"' -f 4 || true
+          | grep -o '"browser_download_url":[^"]*"[^"]*\.deb"' \
+          | cut -d '"' -f 4
       )"
+      url="$(echo "$all_debs" | grep -m 1 -E 'arm64|aarch64' || true)"
+      if [[ -z "$url" ]]; then
+        url="$(echo "$all_debs" | head -n 1 || true)"
+      fi
       ;;
     *)
       die "Unsupported architecture '$arch' (stim2 release .deb expected for arm64)"
