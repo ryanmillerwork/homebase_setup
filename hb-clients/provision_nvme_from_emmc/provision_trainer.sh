@@ -5,7 +5,7 @@ set -euo pipefail
 
 MONITOR_WIDTH_CM_DEFAULT="21.7"
 MONITOR_HEIGHT_CM_DEFAULT="13.6"
-MONITOR_DISTANCE_CM_DEFAULT="40.0"
+MONITOR_DISTANCE_CM_DEFAULT="30.0"
 
 MONITOR_WIDTH_CM="$MONITOR_WIDTH_CM_DEFAULT"
 MONITOR_HEIGHT_CM="$MONITOR_HEIGHT_CM_DEFAULT"
@@ -142,6 +142,72 @@ install_stim2_latest() {
   fi
 }
 
+install_dserv_latest() {
+  local tmp_dir url deb_path arch release_json all_debs
+  tmp_dir="$(mktemp -d)"
+  trap '[[ -n "${tmp_dir:-}" ]] && rm -rf "$tmp_dir"' RETURN
+
+  arch="$(dpkg --print-architecture)"
+  case "$arch" in
+    arm64)
+      deb_path="$tmp_dir/dserv_latest_arm64.deb"
+      release_json="$(wget -qO- https://api.github.com/repos/SheinbergLab/dserv/releases/latest || true)"
+      if [[ -z "$release_json" ]]; then
+        die "Failed to fetch dserv release metadata from GitHub API"
+      fi
+      if echo "$release_json" | grep -q "API rate limit exceeded"; then
+        die "GitHub API rate limit exceeded; try again later or use a cached .deb"
+      fi
+      all_debs="$(
+        echo "$release_json" \
+          | grep -o '"browser_download_url":[^"]*"[^"]*\.deb"' \
+          | cut -d '"' -f 4
+      )"
+      url="$(echo "$all_debs" | grep -m 1 -E 'dserv_.*_arm64\.deb' || true)"
+      ;;
+    *)
+      die "Unsupported architecture '$arch' (dserv release .deb expected for arm64)"
+      ;;
+  esac
+
+  [[ -n "$url" ]] || die "Could not find dserv arm64 .deb in latest release"
+
+  log "Downloading dserv from $url"
+  wget -O "$deb_path" "$url"
+  chmod 0644 "$deb_path"
+  if id _apt >/dev/null 2>&1; then
+    chown _apt:root "$deb_path" || true
+  fi
+  apt-get install -y "$deb_path"
+}
+
+install_dlsh_latest() {
+  local release_json url target_dir filename
+  target_dir="/usr/local/dlsh"
+
+  release_json="$(wget -qO- https://api.github.com/repos/SheinbergLab/dlsh/releases/latest || true)"
+  if [[ -z "$release_json" ]]; then
+    die "Failed to fetch dlsh release metadata from GitHub API"
+  fi
+  if echo "$release_json" | grep -q "API rate limit exceeded"; then
+    die "GitHub API rate limit exceeded; try again later or use a cached .zip"
+  fi
+
+  url="$(
+    echo "$release_json" \
+      | grep -o '"browser_download_url":[^"]*"[^"]*\.zip"' \
+      | cut -d '"' -f 4 \
+      | grep -m 1 -E 'dlsh-.*\.zip' || true
+  )"
+
+  [[ -n "$url" ]] || die "Could not find dlsh .zip in latest release"
+
+  filename="$(basename "$url")"
+  mkdir -p "$target_dir"
+  log "Downloading dlsh archive from $url"
+  wget -O "${target_dir}/${filename}" "$url"
+}
+
 write_stim2_service() {
   local stim2_bin cage_bin run_user run_uid
   stim2_bin="$(command -v stim2 || true)"
@@ -221,6 +287,12 @@ main() {
 
   log "Installing stim2..."
   install_stim2_latest
+
+  log "Installing dserv..."
+  install_dserv_latest
+
+  log "Downloading dlsh archive..."
+  install_dlsh_latest
 
   log "Writing stim2 monitor configuration..."
   write_monitor_tcl
