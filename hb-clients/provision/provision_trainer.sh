@@ -116,9 +116,21 @@ EOF
 }
 
 install_stim2_latest() {
-  local tmp_dir url deb_path arch all_debs
+  local tmp_dir url deb_path arch all_debs os_codename
   tmp_dir="$(mktemp -d)"
   trap '[[ -n "${tmp_dir:-}" ]] && rm -rf "$tmp_dir"' RETURN
+
+  os_codename="$(read_os_codename)"
+  case "$os_codename" in
+    bookworm|trixie)
+      ;;
+    "")
+      die "Could not determine OS codename for stim2 package selection"
+      ;;
+    *)
+      die "Unsupported OS codename '$os_codename' for stim2 package selection"
+      ;;
+  esac
 
   arch="$(dpkg --print-architecture)"
   case "$arch" in
@@ -136,9 +148,9 @@ install_stim2_latest() {
           | grep -o '"browser_download_url":[^"]*"[^"]*\.deb"' \
           | cut -d '"' -f 4
       )"
-      url="$(echo "$all_debs" | grep -m 1 -E 'arm64|aarch64' || true)"
+      url="$(echo "$all_debs" | grep -m 1 -E "stim2_.*_arm64_${os_codename}\.deb" || true)"
       if [[ -z "$url" ]]; then
-        url="$(echo "$all_debs" | head -n 1 || true)"
+        die "Could not find stim2 arm64 ${os_codename} .deb in latest release"
       fi
       ;;
     *)
@@ -212,10 +224,19 @@ install_dserv_latest() {
       log "WARNING: dserv binary not found in expected locations; check dpkg -L dserv"
     fi
   fi
+
+  if [[ -d /usr/local/dserv/local ]]; then
+    if [[ -f /usr/local/dserv/local/post-pins.tcl.EXAMPLE ]]; then
+      cp -n /usr/local/dserv/local/post-pins.tcl.EXAMPLE /usr/local/dserv/local/post-pins.tcl
+    fi
+    if [[ -f /usr/local/dserv/local/sound.tcl.EXAMPLE ]]; then
+      cp -n /usr/local/dserv/local/sound.tcl.EXAMPLE /usr/local/dserv/local/sound.tcl
+    fi
+  fi
 }
 
 install_dlsh_latest() {
-  local release_json url target_dir filename
+  local release_json url target_dir
   target_dir="/usr/local/dlsh"
 
   release_json="$(wget -qO- https://api.github.com/repos/SheinbergLab/dlsh/releases/latest || true)"
@@ -235,10 +256,9 @@ install_dlsh_latest() {
 
   [[ -n "$url" ]] || die "Could not find dlsh .zip in latest release"
 
-  filename="$(basename "$url")"
   mkdir -p "$target_dir"
   log "Downloading dlsh archive from $url"
-  wget -O "${target_dir}/${filename}" "$url"
+  wget -O "${target_dir}/dlsh.zip" "$url"
 }
 
 install_ess_repo() {

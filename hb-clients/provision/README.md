@@ -13,6 +13,7 @@ Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while bo
   - enables SSH (creates `ssh` on the boot partition)
   - creates user/password (writes `userconf.txt` on the boot partition)
   - configures Wi-Fi for the installed NVMe OS (creates a NetworkManager `*.nmconnection` profile in the NVMe **rootfs**)
+  - ensures Wi‑Fi is enabled by default (`/etc/NetworkManager/conf.d/10-wifi-enabled.conf`)
   - prompts for a **hostname** and writes it into the NVMe rootfs (`/etc/hostname` + `/etc/hosts`)
   - sets timezone + locale (and keyboard layout for US/GB)
   - ensures `dtparam=pciex1=on` and `dtparam=ant2` in NVMe `config.txt` (if present)
@@ -53,9 +54,14 @@ You will be prompted to:
 `provision_trainer.sh` prepares a fresh **Raspberry Pi OS Trixie Lite** install to boot directly into stim2 in kiosk mode. High‑level steps:
 
 - installs dependencies (`cage`, `labwc`, `libtcl9.0`, `wget`, `ca-certificates`)
-- downloads the latest `stim2` arm64 `.deb` from GitHub releases and installs it
+- downloads the latest `stim2_*_arm64_{bookworm|trixie}.deb` matching the OS
 - ensures `stim2` is on `PATH` (`/usr/local/bin/stim2` symlink if needed)
 - prompts for monitor geometry and writes `/usr/local/stim2/local/monitor.tcl`
+- downloads the latest `dserv_*_arm64.deb`, installs it, and copies default local configs:
+  - `/usr/local/dserv/local/post-pins.tcl.EXAMPLE` → `post-pins.tcl`
+  - `/usr/local/dserv/local/sound.tcl.EXAMPLE` → `sound.tcl`
+- downloads the latest `dlsh-*.zip` to `/usr/local/dlsh/dlsh.zip`
+- clones `https://github.com/homebase-sheinberg/ess.git` into `~/systems` and sets `ESS_SYSTEM_PATH`
 - installs and enables systemd services from vendor packages:
   - `/usr/local/stim2/systemd/stim2.service`
   - `/usr/local/dserv/systemd/dserv.service`
