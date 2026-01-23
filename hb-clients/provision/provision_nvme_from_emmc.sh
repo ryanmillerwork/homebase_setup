@@ -1008,12 +1008,16 @@ EOF
   fi
 
   # Ensure Wi-Fi is enabled by default for the installed OS.
-  local nm_conf_dir="${root_mnt}/etc/NetworkManager/conf.d"
-  mkdir -p "$nm_conf_dir"
-  cat > "${nm_conf_dir}/10-wifi-enabled.conf" <<'EOF'
+  local nm_state_dir="${root_mnt}/var/lib/NetworkManager"
+  mkdir -p "$nm_state_dir"
+  cat > "${nm_state_dir}/NetworkManager.state" <<'EOF'
 [main]
-wifi.enabled=true
+NetworkingEnabled=true
+WirelessEnabled=true
+WWANEnabled=true
 EOF
+  chmod 600 "${nm_state_dir}/NetworkManager.state"
+  chown root:root "${nm_state_dir}/NetworkManager.state"
 
   # Propagate touchscreen rotation udev rule from the current system if present.
   if [[ -f /etc/udev/rules.d/99-touchscreen-rotate.rules ]]; then
