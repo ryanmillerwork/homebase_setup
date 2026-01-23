@@ -236,7 +236,7 @@ install_dserv_latest() {
 }
 
 install_dlsh_latest() {
-  local release_json url target_dir
+  local release_json url target_dir filename version
   target_dir="/usr/local/dlsh"
 
   release_json="$(wget -qO- https://api.github.com/repos/SheinbergLab/dlsh/releases/latest || true)"
@@ -256,9 +256,15 @@ install_dlsh_latest() {
 
   [[ -n "$url" ]] || die "Could not find dlsh .zip in latest release"
 
+  filename="$(basename "$url")"
+  version="$(echo "$filename" | sed -nE 's/^dlsh-([0-9]+([.][0-9]+)*)\.zip$/\1/p')"
+
   mkdir -p "$target_dir"
   log "Downloading dlsh archive from $url"
   wget -O "${target_dir}/dlsh.zip" "$url"
+  if [[ -n "$version" ]]; then
+    echo "$version" > "${target_dir}/VERSION"
+  fi
 }
 
 install_ess_repo() {
