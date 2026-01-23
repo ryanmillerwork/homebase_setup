@@ -61,7 +61,7 @@ if ! command -v vcgencmd >/dev/null 2>&1; then
 fi
 
 log() {
-  echo "[$(date +%F\ %T)] $*" | tee -a "$LOG_PATH" >/dev/null
+  echo "[$(date +%F\ %T)] $*" | tee -a "$LOG_PATH"
 }
 
 log "Starting power stress test for ${SECONDS_TOTAL}s"
@@ -101,6 +101,18 @@ run_io_stress() {
   echo $!
 }
 
+CPU_PID=""
+IO_PID=""
+
+cleanup() {
+  log "Stopping stress processes..."
+  [[ -n "${CPU_PID:-}" ]] && kill "$CPU_PID" >/dev/null 2>&1 || true
+  [[ -n "${IO_PID:-}" ]] && kill "$IO_PID" >/dev/null 2>&1 || true
+  rm -f "$IO_TMP" >/dev/null 2>&1 || true
+}
+
+trap 'log "Interrupted."; cleanup; exit 130' INT TERM
+
 CPU_PID="$(run_cpu_stress)"
 IO_PID="$(run_io_stress)"
 
@@ -112,10 +124,7 @@ while [[ "$SECONDS" -lt "$end_time" ]]; do
   sleep 1
 done
 
-log "Stopping stress processes..."
-[[ -n "${CPU_PID:-}" ]] && kill "$CPU_PID" >/dev/null 2>&1 || true
-[[ -n "${IO_PID:-}" ]] && kill "$IO_PID" >/dev/null 2>&1 || true
-rm -f "$IO_TMP" >/dev/null 2>&1 || true
+cleanup
 
 log "Recent kernel messages (USB/power related):"
 dmesg -T | grep -iE 'under-voltage|over-current|brown|usb|xhci|reset|error|timeout' | tail -n 200 | tee -a "$LOG_PATH" >/dev/null || true
