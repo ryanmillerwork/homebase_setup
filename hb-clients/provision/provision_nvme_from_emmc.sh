@@ -14,6 +14,8 @@ set -euo pipefail
 
 LOG_PREFIX=""
 HB_WIFI_SCAN_FILE="/tmp/hb_wifi_scan_ssids.txt"
+HB_SELFUPDATED="${HB_SELFUPDATED:-0}"
+HB_POST_UPDATE_ATTEMPTED="${HB_POST_UPDATE_ATTEMPTED:-0}"
 
 # Used by EXIT trap for cleanup (must not be local vars, because traps can run after scope exits).
 HB_BOOT_MNT=""
@@ -87,6 +89,69 @@ have_internet() {
     bash -c 'cat < /dev/null > /dev/tcp/1.1.1.1/443' >/dev/null 2>&1 && return 0
   fi
   return 1
+}
+
+update_self_if_possible() {
+  local phase="$1"
+  local script_path script_dir repo_root origin_head target_ref before after
+
+  if [[ "$HB_SELFUPDATED" == "1" ]]; then
+    return 0
+  fi
+  if [[ "$phase" == "post" && "$HB_POST_UPDATE_ATTEMPTED" == "1" ]]; then
+    return 0
+  fi
+  if ! have_internet; then
+    return 1
+  fi
+  if ! have_cmd git; then
+    log "WARNING: git not available; skipping ${phase}-Wi-Fi self-update."
+    return 1
+  fi
+
+  script_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+  script_dir="$(cd "$(dirname "$script_path")" && pwd -P)"
+  repo_root="$(git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -z "$repo_root" ]]; then
+    log "WARNING: Could not determine git repo root; skipping ${phase}-Wi-Fi self-update."
+    return 1
+  fi
+
+  origin_head="$(git -C "$repo_root" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [[ -z "$origin_head" ]]; then
+    origin_head="origin/main"
+  fi
+
+  before="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
+  if ! git -C "$repo_root" fetch --prune; then
+    log "WARNING: git fetch failed; skipping ${phase}-Wi-Fi self-update."
+    return 1
+  fi
+  target_ref="$(git -C "$repo_root" rev-parse "$origin_head" 2>/dev/null || true)"
+  if [[ -z "$target_ref" ]]; then
+    log "WARNING: Could not resolve ${origin_head}; skipping ${phase}-Wi-Fi self-update."
+    return 1
+  fi
+  if ! git -C "$repo_root" reset --hard "$origin_head"; then
+    log "WARNING: git reset failed; skipping ${phase}-Wi-Fi self-update."
+    return 1
+  fi
+  after="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
+
+  if [[ -n "$before" && "$before" != "$after" ]]; then
+    local updated_script="${repo_root}/hb-clients/provision/provision_nvme_from_emmc.sh"
+    if [[ -x "$updated_script" ]]; then
+      log "Provisioning script updated; restarting..."
+      exec sudo HB_SELFUPDATED=1 HB_POST_UPDATE_ATTEMPTED=1 "$updated_script"
+    else
+      log "WARNING: Updated script not found at ${updated_script}; continuing."
+    fi
+  fi
+
+  if [[ "$phase" == "post" ]]; then
+    HB_POST_UPDATE_ATTEMPTED=1
+  fi
+  return 0
 }
 
 have_internet_via_iface() {
@@ -1146,6 +1211,9 @@ main() {
   need_cmd grep
   need_cmd sed
 
+  # Try a best-effort update before Wi-Fi prompts if internet is already available.
+  update_self_if_possible "pre" || true
+
   # Always prompt for Wi-Fi first, then verify internet before we do any installs/downloads.
   local wifi_ssid="" wifi_pass=""
   log "Starting Wi-Fi selection (needed for downloads unless you already have internet via ethernet)."
@@ -1202,6 +1270,9 @@ main() {
   # If the user provided Wi-Fi, connect_wifi_current already verified internet & route.
   # If they skipped Wi-Fi, they might be on ethernet; allow that.
   log "Internet connectivity verified."
+
+  # If we couldn't update earlier (no internet), try again now and restart if updated.
+  update_self_if_possible "post" || true
 
   local default_hostname=""
   if [[ -r /etc/hostname ]]; then

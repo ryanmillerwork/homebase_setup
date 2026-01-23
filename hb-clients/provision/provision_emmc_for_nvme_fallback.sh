@@ -649,7 +649,7 @@ EOF
 Type=Application
 Name=Homebase NVMe Provisioning
 Comment=Run NVMe provisioning on boot
-Exec=x-terminal-emulator -e bash -lc 'cd /home/provision/homebase_setup/hb-clients/provision_nvme_from_emmc && sudo ./provision_nvme_from_emmc.sh; echo; echo "Provisioning exited. Press Enter to close."; read -r _'
+Exec=x-terminal-emulator -e bash -lc 'cd /home/provision/homebase_setup/hb-clients/provision && sudo ./provision_nvme_from_emmc.sh; echo; echo "Provisioning exited. Press Enter to close."; read -r _'
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
@@ -660,7 +660,7 @@ EOF
   git clone --depth 1 https://github.com/ryanmillerwork/homebase_setup.git "$repo_dir"
 
   # Ensure script is executable and ownership is correct.
-  chmod +x "${repo_dir}/hb-clients/provision_nvme_from_emmc/provision_nvme_from_emmc.sh" || true
+  chmod +x "${repo_dir}/hb-clients/provision/provision_nvme_from_emmc.sh" || true
   chown -R 1000:1000 "$home_dir"
 
   if [[ "$rotate_choice" == "yes" ]]; then
