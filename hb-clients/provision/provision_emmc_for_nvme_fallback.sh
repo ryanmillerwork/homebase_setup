@@ -8,6 +8,8 @@ set -euo pipefail
 
 LOG_PREFIX=""
 
+DEFAULTS_FILE=""
+
 # Used by EXIT trap for cleanup (must not be local vars).
 HB_BOOT_MNT=""
 HB_ROOT_MNT=""
@@ -36,6 +38,97 @@ need_cmd() {
 
 have_cmd() {
   command -v "$1" >/dev/null 2>&1
+}
+
+ini_list_sections() {
+  local file="$1"
+  awk '
+    /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+      line=$0
+      sub(/^[[:space:]]*\[/, "", line)
+      sub(/\][[:space:]]*$/, "", line)
+      print line
+    }' "$file"
+}
+
+ini_list_orgs() {
+  local file="$1"
+  ini_list_sections "$file" | awk -F. 'NF>=2 {print $1}' | sort -u
+}
+
+ini_list_groups_for_org() {
+  local file="$1"
+  local org="$2"
+  ini_list_sections "$file" | awk -F. -v o="$org" 'NF>=2 && $1==o {print $2}' | sort -u
+}
+
+prompt_org_group() {
+  local script_path script_dir defaults_file
+  script_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+  script_dir="$(cd "$(dirname "$script_path")" && pwd -P)"
+  defaults_file="${DEVICE_DEFAULTS_FILE:-${script_dir}/device_defaults.ini}"
+
+  local org=""
+  local group=""
+  local orgs groups choice
+
+  if [[ -r "$defaults_file" ]]; then
+    orgs="$(ini_list_orgs "$defaults_file")"
+  fi
+
+  while true; do
+    if [[ -n "$orgs" ]]; then
+      log "Available organizations:"
+      mapfile -t _orgs_list < <(printf '%s\n' "$orgs" | sed '/^$/d')
+      local i
+      for i in "${!_orgs_list[@]}"; do
+        printf '  [%d] %s\n' "$i" "${_orgs_list[$i]}" >&2
+      done
+      read -r -p "Select organization by number, or type name: " choice
+      if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 0 && "$choice" -lt "${#_orgs_list[@]}" ]]; then
+        org="${_orgs_list[$choice]}"
+      else
+        org="$choice"
+      fi
+      if printf '%s\n' "${_orgs_list[@]}" | grep -Fxq "$org"; then
+        break
+      fi
+      log "Invalid organization '$org'."
+    else
+      read -r -p "Enter organization: " org
+      [[ -n "$org" ]] && break
+    fi
+  done
+
+  if [[ -r "$defaults_file" ]]; then
+    groups="$(ini_list_groups_for_org "$defaults_file" "$org")"
+  fi
+
+  while true; do
+    if [[ -n "$groups" ]]; then
+      log "Available groups for ${org}:"
+      mapfile -t _groups_list < <(printf '%s\n' "$groups" | sed '/^$/d')
+      local i
+      for i in "${!_groups_list[@]}"; do
+        printf '  [%d] %s\n' "$i" "${_groups_list[$i]}" >&2
+      done
+      read -r -p "Select group by number, or type name: " choice
+      if [[ "$choice" =~ ^[0-9]+$ ]] && [[ "$choice" -ge 0 && "$choice" -lt "${#_groups_list[@]}" ]]; then
+        group="${_groups_list[$choice]}"
+      else
+        group="$choice"
+      fi
+      if printf '%s\n' "${_groups_list[@]}" | grep -Fxq "$group"; then
+        break
+      fi
+      log "Invalid group '$group'."
+    else
+      read -r -p "Enter group for ${org}: " group
+      [[ -n "$group" ]] && break
+    fi
+  done
+
+  echo "${org}.${group}"
 }
 
 require_root() {
@@ -570,6 +663,7 @@ write_emmc_config() {
   local boot_mnt="$1"
   local root_mnt="$2"
   local hostname="$3"
+  local defaults_group="$4"
 
   log "Configuring eMMC OS (user/autostart/sudo)..."
 
@@ -644,12 +738,12 @@ EOF
   local home_dir="${root_mnt}/home/${username}"
   mkdir -p "${home_dir}/.config/autostart"
 
-  cat > "${home_dir}/.config/autostart/hb-provision-nvme.desktop" <<'EOF'
+  cat > "${home_dir}/.config/autostart/hb-provision-nvme.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Homebase NVMe Provisioning
 Comment=Run NVMe provisioning on boot
-Exec=x-terminal-emulator -e bash -lc 'cd /home/provision/homebase_setup/hb-clients/provision && sudo ./provision_nvme_from_emmc.sh; echo; echo "Provisioning exited. Press Enter to close."; read -r _'
+Exec=x-terminal-emulator -e bash -lc "cd /home/provision/homebase_setup/hb-clients/provision && DEVICE_DEFAULTS_GROUP=${defaults_group} sudo ./full_provision_nvme.sh; echo; echo 'Provisioning exited. Press Enter to close.'; read -r _"
 Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
@@ -660,7 +754,7 @@ EOF
   git clone --depth 1 https://github.com/ryanmillerwork/homebase_setup.git "$repo_dir"
 
   # Ensure script is executable and ownership is correct.
-  chmod +x "${repo_dir}/hb-clients/provision/provision_nvme_from_emmc.sh" || true
+  chmod +x "${repo_dir}/hb-clients/provision/full_provision_nvme.sh" || true
   chown -R 1000:1000 "$home_dir"
 
   if [[ "$rotate_choice" == "yes" ]]; then
@@ -748,9 +842,12 @@ main() {
   trap 'cleanup_mounts "${HB_BOOT_MNT:-}" "${HB_ROOT_MNT:-}"' EXIT
   mount_emmc_partitions_for_config "$boot_part" "$root_part" "$HB_BOOT_MNT" "$HB_ROOT_MNT"
 
+  local defaults_group
+  defaults_group="$(prompt_org_group)"
+
   local hostname
   hostname="$(prompt_hostname_emmc)"
-  write_emmc_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$hostname"
+  write_emmc_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$hostname" "$defaults_group"
 
   cleanup_mounts "$HB_BOOT_MNT" "$HB_ROOT_MNT"
   trap - EXIT

@@ -29,6 +29,8 @@ DEFAULT_SCREEN_PIXELS_WIDTH=""
 DEFAULT_SCREEN_PIXELS_HEIGHT=""
 DEFAULT_SCREEN_REFRESH_RATE=""
 DEFAULT_SCREEN_ROTATION=""
+DEFAULT_MESH_HOST=""
+DEFAULT_MESH_WORKGROUP=""
 MONITOR_WIDTH_CM_DEFAULT="21.7"
 MONITOR_HEIGHT_CM_DEFAULT="13.6"
 MONITOR_DISTANCE_CM_DEFAULT="30.0"
@@ -78,7 +80,7 @@ ini_list_sections() {
 
 ini_list_device_sections() {
   local file="$1"
-  ini_list_sections "$file" | grep -v '\.meta$' || true
+  ini_list_sections "$file" | awk -F. 'NF>=3' || true
 }
 
 ini_list_groups() {
@@ -226,11 +228,16 @@ load_defaults() {
   log "Using defaults section: $DEFAULTS_SECTION"
 
   local group="${DEFAULTS_SECTION%.*}"
-  local meta="${group}.meta"
+  local meta="${group}"
   if ini_section_exists "$DEFAULTS_FILE" "$meta"; then
     local ess_source
     ess_source="$(ini_get "$DEFAULTS_FILE" "$meta" "ess_source")"
     [[ -n "$ess_source" ]] && ESS_SOURCE="$ess_source"
+    local mesh_host mesh_workgroup
+    mesh_host="$(ini_get "$DEFAULTS_FILE" "$meta" "mesh_host")"
+    mesh_workgroup="$(ini_get "$DEFAULTS_FILE" "$meta" "mesh_workgroup")"
+    [[ -n "$mesh_host" ]] && DEFAULT_MESH_HOST="$mesh_host"
+    [[ -n "$mesh_workgroup" ]] && DEFAULT_MESH_WORKGROUP="$mesh_workgroup"
   fi
 
   local val
@@ -1526,6 +1533,13 @@ install_dserv_latest_root() {
   fi
   if [[ -f "${root_mnt}/usr/local/dserv/local/sound.tcl.EXAMPLE" ]]; then
     cp -n "${root_mnt}/usr/local/dserv/local/sound.tcl.EXAMPLE" "${root_mnt}/usr/local/dserv/local/sound.tcl" || true
+  fi
+  if [[ -f "${root_mnt}/usr/local/dserv/local/mesh.tcl.EXAMPLE" ]]; then
+    local mesh_target="${root_mnt}/usr/local/dserv/local/mesh.tcl"
+    cp -n "${root_mnt}/usr/local/dserv/local/mesh.tcl.EXAMPLE" "$mesh_target" || true
+    if [[ -n "$DEFAULT_MESH_HOST" && -n "$DEFAULT_MESH_WORKGROUP" && -f "$mesh_target" ]]; then
+      sed -i -E "s|^mesh_configure[[:space:]]+\"[^\"]*\"[[:space:]]+\"[^\"]*\"|mesh_configure \"${DEFAULT_MESH_HOST}\" \"${DEFAULT_MESH_WORKGROUP}\"|" "$mesh_target"
+    fi
   fi
 }
 
