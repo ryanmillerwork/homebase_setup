@@ -17,6 +17,17 @@ HB_WIFI_SCAN_FILE="/tmp/hb_wifi_scan_ssids.txt"
 HB_SELFUPDATED="${HB_SELFUPDATED:-0}"
 HB_POST_UPDATE_ATTEMPTED="${HB_POST_UPDATE_ATTEMPTED:-0}"
 
+DEFAULTS_FILE=""
+DEFAULTS_SECTION=""
+DEFAULT_USERNAME=""
+DEFAULT_TIMEZONE="America/New_York"
+DEFAULT_LOCALE="en_us"
+DEFAULT_WIFI_COUNTRY="US"
+DEFAULT_SCREEN_PIXELS_WIDTH=""
+DEFAULT_SCREEN_PIXELS_HEIGHT=""
+DEFAULT_SCREEN_REFRESH_RATE=""
+DEFAULT_SCREEN_ROTATION=""
+
 # Used by EXIT trap for cleanup (must not be local vars, because traps can run after scope exits).
 HB_BOOT_MNT=""
 HB_ROOT_MNT=""
@@ -45,6 +56,173 @@ need_cmd() {
 
 have_cmd() {
   command -v "$1" >/dev/null 2>&1
+}
+
+ini_list_sections() {
+  local file="$1"
+  awk 'match($0, /^[[:space:]]*\[([^\]]+)\][[:space:]]*$/, m) {print m[1]}' "$file"
+}
+
+ini_list_device_sections() {
+  local file="$1"
+  ini_list_sections "$file" | grep -v '\.meta$' || true
+}
+
+ini_list_groups() {
+  local file="$1"
+  ini_list_device_sections "$file" | awk -F. '
+    NF>=2 {
+      group=$1
+      for (i=2; i<NF; i++) group=group "." $i
+      print group
+    }' | sort -u
+}
+
+ini_list_device_types_for_group() {
+  local file="$1"
+  local group="$2"
+  ini_list_device_sections "$file" | awk -F. -v g="$group" '
+    NF>=2 {
+      grp=$1
+      for (i=2; i<NF; i++) grp=grp "." $i
+      if (grp==g) print $NF
+    }' | sort -u
+}
+
+ini_section_exists() {
+  local file="$1"
+  local section="$2"
+  ini_list_sections "$file" | grep -Fxq "$section"
+}
+
+ini_get() {
+  local file="$1"
+  local section="$2"
+  local key="$3"
+  awk -v section="$section" -v key="$key" '
+    /^[[:space:]]*[#;]/ {next}
+    match($0, /^[[:space:]]*\[([^\]]+)\][[:space:]]*$/, m) {in_section=(m[1]==section); next}
+    in_section {
+      split($0, a, "=")
+      k=a[1]
+      sub(/^[[:space:]]+/, "", k); sub(/[[:space:]]+$/, "", k)
+      if (k==key) {
+        v=substr($0, index($0, "=")+1)
+        sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+        print v
+        exit
+      }
+    }
+  ' "$file"
+}
+
+select_defaults_section() {
+  local file="$1"
+  local section="${DEVICE_DEFAULTS_SECTION:-}"
+  local group="${DEVICE_DEFAULTS_GROUP:-}"
+  local subgroup="${DEVICE_DEFAULTS_SUBGROUP:-}"
+
+  if [[ -n "$section" ]] && ini_section_exists "$file" "$section"; then
+    echo "$section"
+    return 0
+  fi
+
+  if [[ -n "$group" && -n "$subgroup" ]]; then
+    section="${group}.${subgroup}"
+    if ini_section_exists "$file" "$section"; then
+      echo "$section"
+      return 0
+    fi
+  fi
+
+  local groups group_choice
+  groups="$(ini_list_groups "$file")"
+  if [[ -z "$groups" ]]; then
+    return 0
+  fi
+
+  log "Available groups:"
+  mapfile -t _groups_list < <(printf '%s\n' "$groups" | sed '/^$/d')
+  local i
+  for i in "${!_groups_list[@]}"; do
+    printf '  [%d] %s\n' "$i" "${_groups_list[$i]}" >&2
+  done
+  read -r -p "Select group by number, or type name (leave blank to skip defaults): " group_choice
+  if [[ -z "$group_choice" ]]; then
+    echo ""
+    return 0
+  fi
+  if [[ "$group_choice" =~ ^[0-9]+$ ]] && [[ "$group_choice" -ge 0 && "$group_choice" -lt "${#_groups_list[@]}" ]]; then
+    group="${_groups_list[$group_choice]}"
+  else
+    group="$group_choice"
+  fi
+
+  local types type_choice
+  types="$(ini_list_device_types_for_group "$file" "$group")"
+  if [[ -z "$types" ]]; then
+    die "No device types found for group '$group'."
+  fi
+
+  log "Available device types for ${group}:"
+  mapfile -t _types_list < <(printf '%s\n' "$types" | sed '/^$/d')
+  for i in "${!_types_list[@]}"; do
+    printf '  [%d] %s\n' "$i" "${_types_list[$i]}" >&2
+  done
+  read -r -p "Select device type by number, or type name (leave blank to skip defaults): " type_choice
+  if [[ -z "$type_choice" ]]; then
+    echo ""
+    return 0
+  fi
+  if [[ "$type_choice" =~ ^[0-9]+$ ]] && [[ "$type_choice" -ge 0 && "$type_choice" -lt "${#_types_list[@]}" ]]; then
+    subgroup="${_types_list[$type_choice]}"
+  else
+    subgroup="$type_choice"
+  fi
+
+  section="${group}.${subgroup}"
+  if ini_section_exists "$file" "$section"; then
+    echo "$section"
+    return 0
+  fi
+  die "Defaults section '$section' not found in $file"
+}
+
+load_defaults() {
+  local script_path script_dir
+  script_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+  script_dir="$(cd "$(dirname "$script_path")" && pwd -P)"
+  DEFAULTS_FILE="${DEVICE_DEFAULTS_FILE:-${script_dir}/device_defaults.ini}"
+
+  if [[ ! -r "$DEFAULTS_FILE" ]]; then
+    log "WARNING: Defaults file not found at $DEFAULTS_FILE; using built-in defaults."
+    return 0
+  fi
+
+  DEFAULTS_SECTION="$(select_defaults_section "$DEFAULTS_FILE")" || die "Failed to select defaults section."
+  if [[ -z "$DEFAULTS_SECTION" ]]; then
+    log "No defaults selected; using built-in defaults."
+    return 0
+  fi
+  log "Using defaults section: $DEFAULTS_SECTION"
+
+  local val
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "username")"
+  [[ -n "$val" ]] && DEFAULT_USERNAME="$val"
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "timezone")"
+  [[ -n "$val" ]] && DEFAULT_TIMEZONE="$val"
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "locale")"
+  [[ -n "$val" ]] && DEFAULT_LOCALE="$val"
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "wifi_country")"
+  [[ -n "$val" ]] && DEFAULT_WIFI_COUNTRY="$val"
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "screen_pixels_width")"
+  [[ -n "$val" ]] && DEFAULT_SCREEN_PIXELS_WIDTH="$val"
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "screen_pixels_height")"
+  [[ -n "$val" ]] && DEFAULT_SCREEN_PIXELS_HEIGHT="$val"
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "screen_refresh_rate")"
+  [[ -n "$val" ]] && DEFAULT_SCREEN_REFRESH_RATE="$val"
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "screen_rotation")"
+  [[ -n "$val" ]] && DEFAULT_SCREEN_ROTATION="$val"
 }
 
 require_root() {
@@ -652,9 +830,15 @@ find_nvme_partition() {
 }
 
 prompt_username_password() {
-  local username password
+  local default_username="${1:-}"
+  local username password input
   while true; do
-    read -r -p "Enter username to create on the NVMe OS: " username
+    if [[ -n "$default_username" ]]; then
+      read -r -p "Enter username to create on the NVMe OS [${default_username}]: " input
+      username="${input:-$default_username}"
+    else
+      read -r -p "Enter username to create on the NVMe OS: " username
+    fi
     if [[ ! "$username" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
       log "Invalid username '$username' (use a-z, 0-9, '_' or '-', must start with a letter or '_')."
       continue
@@ -691,10 +875,15 @@ prompt_hostname() {
 
 prompt_wifi_country() {
   # Two-letter ISO 3166-1 alpha-2 country code, e.g. US, GB, DE.
-  local cc
+  local cc default_cc="${1:-}"
   while true; do
-    read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP). Default: US: " cc
-    cc="${cc:-US}"
+    if [[ -n "$default_cc" ]]; then
+      read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP). Default: ${default_cc}: " cc
+      cc="${cc:-$default_cc}"
+    else
+      read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP). Default: US: " cc
+      cc="${cc:-US}"
+    fi
     cc="${cc^^}"
     if [[ "$cc" =~ ^[A-Z]{2}$ ]]; then
       echo "$cc"
@@ -706,10 +895,15 @@ prompt_wifi_country() {
 
 prompt_timezone() {
   # Timezone in Region/City format, e.g. America/Los_Angeles.
-  local tz
+  local tz default_tz="${1:-}"
   while true; do
-    read -r -p "Enter timezone for NVMe OS (e.g. America/New_York, America/Los_Angeles, Europe/London, Asia/Tokyo). Default: America/New_York. Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones : " tz
-    tz="${tz:-America/New_York}"
+    if [[ -n "$default_tz" ]]; then
+      read -r -p "Enter timezone for NVMe OS (e.g. America/New_York, America/Los_Angeles, Europe/London, Asia/Tokyo). Default: ${default_tz}. Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones : " tz
+      tz="${tz:-$default_tz}"
+    else
+      read -r -p "Enter timezone for NVMe OS (e.g. America/New_York, America/Los_Angeles, Europe/London, Asia/Tokyo). Default: America/New_York. Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones : " tz
+      tz="${tz:-America/New_York}"
+    fi
     if [[ -f "/usr/share/zoneinfo/${tz}" ]]; then
       echo "$tz"
       return 0
@@ -720,10 +914,15 @@ prompt_timezone() {
 
 prompt_locale() {
   # Locale in ll_CC format (user can type lower-case like en_us).
-  local loc base
+  local loc base default_loc="${1:-}"
   while true; do
-    read -r -p "Enter locale for NVMe OS (e.g. en_us, en_gb, fr_fr, de_de). Default: en_us. Full list: https://sourceware.org/glibc/wiki/Locales : " loc
-    loc="${loc:-en_us}"
+    if [[ -n "$default_loc" ]]; then
+      read -r -p "Enter locale for NVMe OS (e.g. en_us, en_gb, fr_fr, de_de). Default: ${default_loc}. Full list: https://sourceware.org/glibc/wiki/Locales : " loc
+      loc="${loc:-$default_loc}"
+    else
+      read -r -p "Enter locale for NVMe OS (e.g. en_us, en_gb, fr_fr, de_de). Default: en_us. Full list: https://sourceware.org/glibc/wiki/Locales : " loc
+      loc="${loc:-en_us}"
+    fi
     loc="$(echo "$loc" | tr 'A-Z' 'a-z')"
     if [[ ! "$loc" =~ ^[a-z]{2}_[a-z]{2}$ ]]; then
       log "Invalid locale '${loc}'. Example: en_us, en_gb, fr_fr, de_de."
@@ -736,6 +935,45 @@ prompt_locale() {
     fi
     log "Locale '${loc}' not found on this system. Example: en_us, en_gb, fr_fr, de_de."
   done
+}
+
+prompt_screen_settings() {
+  local w h r rot input
+
+  if [[ -n "$DEFAULT_SCREEN_PIXELS_WIDTH" ]]; then
+    read -r -p "Enter screen pixel width (default: ${DEFAULT_SCREEN_PIXELS_WIDTH}): " input
+    w="${input:-$DEFAULT_SCREEN_PIXELS_WIDTH}"
+  else
+    read -r -p "Enter screen pixel width (leave blank to skip): " w
+  fi
+
+  if [[ -n "$DEFAULT_SCREEN_PIXELS_HEIGHT" ]]; then
+    read -r -p "Enter screen pixel height (default: ${DEFAULT_SCREEN_PIXELS_HEIGHT}): " input
+    h="${input:-$DEFAULT_SCREEN_PIXELS_HEIGHT}"
+  else
+    read -r -p "Enter screen pixel height (leave blank to skip): " h
+  fi
+
+  if [[ -n "$DEFAULT_SCREEN_REFRESH_RATE" ]]; then
+    read -r -p "Enter screen refresh rate Hz (default: ${DEFAULT_SCREEN_REFRESH_RATE}): " input
+    r="${input:-$DEFAULT_SCREEN_REFRESH_RATE}"
+  else
+    read -r -p "Enter screen refresh rate Hz (leave blank to skip): " r
+  fi
+
+  if [[ -n "$DEFAULT_SCREEN_ROTATION" ]]; then
+    read -r -p "Enter screen rotation degrees (0/90/180/270). Default: ${DEFAULT_SCREEN_ROTATION}: " input
+    rot="${input:-$DEFAULT_SCREEN_ROTATION}"
+  else
+    read -r -p "Enter screen rotation degrees (0/90/180/270). Default: 0: " rot
+    rot="${rot:-0}"
+  fi
+
+  [[ -n "$w" && -n "$h" && -n "$r" ]] || { echo ""; echo ""; echo ""; echo ""; return 0; }
+  echo "$w"
+  echo "$h"
+  echo "$r"
+  echo "$rot"
 }
 
 wifi_scan_ssids() {
@@ -876,6 +1114,10 @@ write_headless_config() {
   local wifi_country="$8"
   local timezone="$9"
   local locale="${10}"
+  local screen_w="${11}"
+  local screen_h="${12}"
+  local screen_r="${13}"
+  local screen_rot="${14}"
 
   log "Configuring NVMe OS (SSH/user/Wi-Fi)..."
 
@@ -944,30 +1186,22 @@ write_headless_config() {
     fi
   fi
 
-  # Propagate display rotation from the current system's cmdline (if present).
-  # Keep cmdline a single line; add only if not already present.
+  # Configure display mode/rotation on the NVMe boot cmdline when provided.
   local cmdline_rotate=""
   if [[ -f "${boot_mnt}/cmdline.txt" ]]; then
     cmdline_rotate="${boot_mnt}/cmdline.txt"
   elif [[ -f "${boot_mnt}/firmware/cmdline.txt" ]]; then
     cmdline_rotate="${boot_mnt}/firmware/cmdline.txt"
   fi
-  if [[ -n "$cmdline_rotate" ]]; then
-    local current_cmdline=""
-    if [[ -f /boot/firmware/cmdline.txt ]]; then
-      current_cmdline="$(cat /boot/firmware/cmdline.txt 2>/dev/null || true)"
-    elif [[ -f /boot/cmdline.txt ]]; then
-      current_cmdline="$(cat /boot/cmdline.txt 2>/dev/null || true)"
+  if [[ -n "$cmdline_rotate" && -n "$screen_w" && -n "$screen_h" && -n "$screen_r" ]]; then
+    local rotate_token="video=HDMI-A-1:${screen_w}x${screen_h}M@${screen_r},rotate=${screen_rot:-0}"
+    if grep -qE '(^|[[:space:]])video=HDMI-A-1:[^[:space:]]+' "$cmdline_rotate"; then
+      sed -i -E "s/(^|[[:space:]])video=HDMI-A-1:[^[:space:]]+/\1${rotate_token}/" "$cmdline_rotate"
+    else
+      sed -i -e "1 s/$/ ${rotate_token}/" "$cmdline_rotate"
     fi
-    local rotate_token=""
-    rotate_token="$(printf '%s\n' "$current_cmdline" | grep -oE '(^|[[:space:]])video=[^[:space:]]*rotate=180[^[:space:]]*' | head -n1 | sed 's/^[[:space:]]*//')"
-    if [[ -n "$rotate_token" ]]; then
-      if ! grep -qE '(^|[[:space:]])video=[^[:space:]]*rotate=180([^[:space:]]*|$)' "$cmdline_rotate"; then
-        sed -i -e "1 s/$/ ${rotate_token}/" "$cmdline_rotate"
-      fi
-    fi
-  else
-    log "WARNING: Could not find cmdline.txt on boot partition to propagate display rotation."
+  elif [[ -z "$cmdline_rotate" ]]; then
+    log "WARNING: Could not find cmdline.txt on boot partition to set display mode."
   fi
 
   # Wi-Fi on Bookworm uses NetworkManager; create a connection profile in rootfs.
@@ -1210,6 +1444,7 @@ EOF
 
 main() {
   require_root
+  load_defaults
   need_cmd lsblk
   need_cmd awk
   need_cmd grep
@@ -1224,11 +1459,19 @@ main() {
   start_wifi_scan_background
 
   local wifi_country
-  wifi_country="$(prompt_wifi_country)"
+  wifi_country="$(prompt_wifi_country "$DEFAULT_WIFI_COUNTRY")"
 
   local timezone locale
-  timezone="$(prompt_timezone)"
-  locale="$(prompt_locale)"
+  timezone="$(prompt_timezone "$DEFAULT_TIMEZONE")"
+  locale="$(prompt_locale "$DEFAULT_LOCALE")"
+
+  local screen_w screen_h screen_r screen_rot
+  {
+    read -r screen_w
+    read -r screen_h
+    read -r screen_r
+    read -r screen_rot
+  } < <(prompt_screen_settings)
 
   {
     read -r wifi_ssid
@@ -1289,7 +1532,7 @@ main() {
   {
     read -r username
     read -r password
-  } < <(prompt_username_password)
+  } < <(prompt_username_password "$DEFAULT_USERNAME")
 
   check_bookworm_or_later
   check_root_on_emmc_and_nvme_present
@@ -1325,7 +1568,7 @@ main() {
   trap 'cleanup_mounts "${HB_BOOT_MNT:-}" "${HB_ROOT_MNT:-}"' EXIT
   mount_nvme_partitions_for_config "$boot_part" "$root_part" "$HB_BOOT_MNT" "$HB_ROOT_MNT"
 
-  write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country" "$timezone" "$locale"
+  write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country" "$timezone" "$locale" "$screen_w" "$screen_h" "$screen_r" "$screen_rot"
 
   configure_nvme_packages_and_services "$HB_ROOT_MNT" "$locale"
 

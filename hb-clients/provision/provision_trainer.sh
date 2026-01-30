@@ -6,6 +6,7 @@ set -euo pipefail
 MONITOR_WIDTH_CM_DEFAULT="21.7"
 MONITOR_HEIGHT_CM_DEFAULT="13.6"
 MONITOR_DISTANCE_CM_DEFAULT="30.0"
+ESS_SOURCE_DEFAULT="https://github.com/homebase-sheinberg/ess.git"
 
 MONITOR_WIDTH_CM="$MONITOR_WIDTH_CM_DEFAULT"
 MONITOR_HEIGHT_CM="$MONITOR_HEIGHT_CM_DEFAULT"
@@ -14,6 +15,10 @@ MONITOR_DISTANCE_CM="$MONITOR_DISTANCE_CM_DEFAULT"
 RUN_USER=""
 RUN_UID=""
 RUN_HOME=""
+
+DEFAULTS_FILE=""
+DEFAULTS_SECTION=""
+ESS_SOURCE="$ESS_SOURCE_DEFAULT"
 
 log() {
   echo "$@" >&2
@@ -32,6 +37,175 @@ require_root() {
 
 have_cmd() {
   command -v "$1" >/dev/null 2>&1
+}
+
+ini_list_sections() {
+  local file="$1"
+  awk 'match($0, /^[[:space:]]*\[([^\]]+)\][[:space:]]*$/, m) {print m[1]}' "$file"
+}
+
+ini_list_device_sections() {
+  local file="$1"
+  ini_list_sections "$file" | grep -v '\.meta$' || true
+}
+
+ini_list_groups() {
+  local file="$1"
+  ini_list_device_sections "$file" | awk -F. '
+    NF>=2 {
+      group=$1
+      for (i=2; i<NF; i++) group=group "." $i
+      print group
+    }' | sort -u
+}
+
+ini_list_device_types_for_group() {
+  local file="$1"
+  local group="$2"
+  ini_list_device_sections "$file" | awk -F. -v g="$group" '
+    NF>=2 {
+      grp=$1
+      for (i=2; i<NF; i++) grp=grp "." $i
+      if (grp==g) print $NF
+    }' | sort -u
+}
+
+ini_section_exists() {
+  local file="$1"
+  local section="$2"
+  ini_list_sections "$file" | grep -Fxq "$section"
+}
+
+ini_get() {
+  local file="$1"
+  local section="$2"
+  local key="$3"
+  awk -v section="$section" -v key="$key" '
+    /^[[:space:]]*[#;]/ {next}
+    match($0, /^[[:space:]]*\[([^\]]+)\][[:space:]]*$/, m) {in_section=(m[1]==section); next}
+    in_section {
+      split($0, a, "=")
+      k=a[1]
+      sub(/^[[:space:]]+/, "", k); sub(/[[:space:]]+$/, "", k)
+      if (k==key) {
+        v=substr($0, index($0, "=")+1)
+        sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+        print v
+        exit
+      }
+    }
+  ' "$file"
+}
+
+select_defaults_section() {
+  local file="$1"
+  local section="${DEVICE_DEFAULTS_SECTION:-}"
+  local group="${DEVICE_DEFAULTS_GROUP:-}"
+  local subgroup="${DEVICE_DEFAULTS_SUBGROUP:-}"
+
+  if [[ -n "$section" ]] && ini_section_exists "$file" "$section"; then
+    echo "$section"
+    return 0
+  fi
+
+  if [[ -n "$group" && -n "$subgroup" ]]; then
+    section="${group}.${subgroup}"
+    if ini_section_exists "$file" "$section"; then
+      echo "$section"
+      return 0
+    fi
+  fi
+
+  local groups group_choice
+  groups="$(ini_list_groups "$file")"
+  if [[ -z "$groups" ]]; then
+    return 0
+  fi
+
+  log "Available groups:"
+  mapfile -t _groups_list < <(printf '%s\n' "$groups" | sed '/^$/d')
+  local i
+  for i in "${!_groups_list[@]}"; do
+    printf '  [%d] %s\n' "$i" "${_groups_list[$i]}" >&2
+  done
+  read -r -p "Select group by number, or type name (leave blank to skip defaults): " group_choice
+  if [[ -z "$group_choice" ]]; then
+    echo ""
+    return 0
+  fi
+  if [[ "$group_choice" =~ ^[0-9]+$ ]] && [[ "$group_choice" -ge 0 && "$group_choice" -lt "${#_groups_list[@]}" ]]; then
+    group="${_groups_list[$group_choice]}"
+  else
+    group="$group_choice"
+  fi
+
+  local types type_choice
+  types="$(ini_list_device_types_for_group "$file" "$group")"
+  if [[ -z "$types" ]]; then
+    die "No device types found for group '$group'."
+  fi
+
+  log "Available device types for ${group}:"
+  mapfile -t _types_list < <(printf '%s\n' "$types" | sed '/^$/d')
+  for i in "${!_types_list[@]}"; do
+    printf '  [%d] %s\n' "$i" "${_types_list[$i]}" >&2
+  done
+  read -r -p "Select device type by number, or type name (leave blank to skip defaults): " type_choice
+  if [[ -z "$type_choice" ]]; then
+    echo ""
+    return 0
+  fi
+  if [[ "$type_choice" =~ ^[0-9]+$ ]] && [[ "$type_choice" -ge 0 && "$type_choice" -lt "${#_types_list[@]}" ]]; then
+    subgroup="${_types_list[$type_choice]}"
+  else
+    subgroup="$type_choice"
+  fi
+
+  section="${group}.${subgroup}"
+  if ini_section_exists "$file" "$section"; then
+    echo "$section"
+    return 0
+  fi
+  die "Defaults section '$section' not found in $file"
+}
+
+load_defaults() {
+  local script_path script_dir
+  script_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+  script_dir="$(cd "$(dirname "$script_path")" && pwd -P)"
+  DEFAULTS_FILE="${DEVICE_DEFAULTS_FILE:-${script_dir}/device_defaults.ini}"
+
+  if [[ ! -r "$DEFAULTS_FILE" ]]; then
+    log "WARNING: Defaults file not found at $DEFAULTS_FILE; using built-in defaults."
+    return 0
+  fi
+
+  DEFAULTS_SECTION="$(select_defaults_section "$DEFAULTS_FILE")" || die "Failed to select defaults section."
+  if [[ -z "$DEFAULTS_SECTION" ]]; then
+    log "No defaults selected; using built-in defaults."
+    return 0
+  fi
+  log "Using defaults section: $DEFAULTS_SECTION"
+
+  local group="${DEFAULTS_SECTION%.*}"
+  local meta="${group}.meta"
+  if ini_section_exists "$DEFAULTS_FILE" "$meta"; then
+    local ess_source
+    ess_source="$(ini_get "$DEFAULTS_FILE" "$meta" "ess_source")"
+    [[ -n "$ess_source" ]] && ESS_SOURCE="$ess_source"
+  fi
+
+  local val
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "monitor_width_cm")"
+  [[ -n "$val" ]] && MONITOR_WIDTH_CM_DEFAULT="$val"
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "monitor_height_cm")"
+  [[ -n "$val" ]] && MONITOR_HEIGHT_CM_DEFAULT="$val"
+  val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "monitor_distance_cm")"
+  [[ -n "$val" ]] && MONITOR_DISTANCE_CM_DEFAULT="$val"
+
+  MONITOR_WIDTH_CM="$MONITOR_WIDTH_CM_DEFAULT"
+  MONITOR_HEIGHT_CM="$MONITOR_HEIGHT_CM_DEFAULT"
+  MONITOR_DISTANCE_CM="$MONITOR_DISTANCE_CM_DEFAULT"
 }
 
 read_os_codename() {
@@ -274,8 +448,8 @@ install_ess_repo() {
   systems_dir="${RUN_HOME}/systems"
   if [[ ! -d "${systems_dir}/ess" ]]; then
     mkdir -p "$systems_dir"
-    log "Cloning ess into ${systems_dir}/ess"
-    git -C "$systems_dir" clone https://github.com/homebase-sheinberg/ess.git
+    log "Cloning ess into ${systems_dir}/ess from ${ESS_SOURCE}"
+    git -C "$systems_dir" clone "$ESS_SOURCE"
   else
     log "ess repo already present at ${systems_dir}/ess"
   fi
@@ -318,6 +492,7 @@ configure_raspi_config() {
 main() {
   require_root
   check_trixie_or_later
+  load_defaults
   prompt_monitor_settings
 
   log "Installing dependencies..."
