@@ -41,7 +41,13 @@ have_cmd() {
 
 ini_list_sections() {
   local file="$1"
-  awk 'match($0, /^[[:space:]]*\[([^\]]+)\][[:space:]]*$/, m) {print m[1]}' "$file"
+  awk '
+    /^[[:space:]]*\[[^]]+\][[:space:]]*$/ {
+      line=$0
+      sub(/^[[:space:]]*\[/, "", line)
+      sub(/\][[:space:]]*$/, "", line)
+      print line
+    }' "$file"
 }
 
 ini_list_device_sections() {
@@ -82,7 +88,13 @@ ini_get() {
   local key="$3"
   awk -v section="$section" -v key="$key" '
     /^[[:space:]]*[#;]/ {next}
-    match($0, /^[[:space:]]*\[([^\]]+)\][[:space:]]*$/, m) {in_section=(m[1]==section); next}
+    /^[[:space:]]*\[/ {
+      line=$0
+      sub(/^[[:space:]]*\[/, "", line)
+      sub(/\][[:space:]]*$/, "", line)
+      in_section=(line==section)
+      next
+    }
     in_section {
       split($0, a, "=")
       k=a[1]
