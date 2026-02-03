@@ -18,6 +18,7 @@ LOG_PREFIX=""
 HB_WIFI_SCAN_FILE="/tmp/hb_wifi_scan_ssids.txt"
 HB_SELFUPDATED="${HB_SELFUPDATED:-0}"
 HB_POST_UPDATE_ATTEMPTED="${HB_POST_UPDATE_ATTEMPTED:-0}"
+HB_SELFUPDATE_NO_INTERNET="${HB_SELFUPDATE_NO_INTERNET:-0}"
 
 DEFAULTS_FILE=""
 DEFAULTS_SECTION=""
@@ -322,6 +323,16 @@ update_self_if_possible() {
   local phase="$1"
   local script_path script_dir repo_root origin_head target_ref before after
 
+  log "Self-update: checking for updates (${phase} phase)..."
+
+  git_cmd() {
+    if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+      sudo -u "$SUDO_USER" git -C "$repo_root" "$@"
+    else
+      git -C "$repo_root" "$@"
+    fi
+  }
+
   if [[ "$HB_SELFUPDATED" == "1" ]]; then
     return 0
   fi
@@ -329,6 +340,8 @@ update_self_if_possible() {
     return 0
   fi
   if ! have_internet; then
+    HB_SELFUPDATE_NO_INTERNET=1
+    log "Self-update: no internet; skipping ${phase} update."
     return 1
   fi
   if ! have_cmd git; then
@@ -344,30 +357,31 @@ update_self_if_possible() {
     return 1
   fi
 
-  origin_head="$(git -C "$repo_root" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  origin_head="$(git_cmd symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null || true)"
   if [[ -z "$origin_head" ]]; then
     origin_head="origin/main"
   fi
 
-  before="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
-  if ! git -C "$repo_root" fetch --prune; then
+  before="$(git_cmd rev-parse HEAD 2>/dev/null || true)"
+  if ! git_cmd fetch --prune; then
     log "WARNING: git fetch failed; skipping ${phase}-Wi-Fi self-update."
     return 1
   fi
-  target_ref="$(git -C "$repo_root" rev-parse "$origin_head" 2>/dev/null || true)"
+  target_ref="$(git_cmd rev-parse "$origin_head" 2>/dev/null || true)"
   if [[ -z "$target_ref" ]]; then
     log "WARNING: Could not resolve ${origin_head}; skipping ${phase}-Wi-Fi self-update."
     return 1
   fi
-  if ! git -C "$repo_root" reset --hard "$origin_head"; then
+  if ! git_cmd reset --hard "$origin_head"; then
     log "WARNING: git reset failed; skipping ${phase}-Wi-Fi self-update."
     return 1
   fi
-  after="$(git -C "$repo_root" rev-parse HEAD 2>/dev/null || true)"
+  after="$(git_cmd rev-parse HEAD 2>/dev/null || true)"
 
   if [[ -n "$before" && "$before" != "$after" ]]; then
     local updated_script="${repo_root}/hb-clients/provision/full_provision_nvme.sh"
     if [[ -x "$updated_script" ]]; then
+      log "Self-update: updated script detected; restarting..."
       log "Provisioning script updated; restarting..."
       exec sudo HB_SELFUPDATED=1 HB_POST_UPDATE_ATTEMPTED=1 "$updated_script"
     else
@@ -1679,6 +1693,13 @@ main() {
   require_root
   load_defaults
 
+  HB_SELFUPDATE_NO_INTERNET=0
+  if ! update_self_if_possible "pre"; then
+    if [[ "$HB_SELFUPDATE_NO_INTERNET" == "1" ]]; then
+      log "Self-update: will retry after Wi-Fi is configured."
+    fi
+  fi
+
   local wifi_country timezone locale screen_w screen_h screen_r screen_rot
   local wifi_ssid="" wifi_pass=""
   local hostname username password
@@ -1735,6 +1756,9 @@ main() {
   fi
   log "Internet connectivity verified."
 
+  if [[ "$HB_SELFUPDATE_NO_INTERNET" == "1" ]]; then
+    log "Self-update: retrying now that Wi-Fi is configured..."
+  fi
   update_self_if_possible "post" || true
 
   install_packages_host
