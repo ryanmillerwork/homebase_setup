@@ -1425,7 +1425,6 @@ enable_systemd_service_root() {
 
   install -m 0644 "$source" "${root_mnt}/etc/systemd/system/${service_name}"
   if command -v systemctl >/dev/null 2>&1; then
-    SYSTEMD_OFFLINE=1 systemctl --root "$root_mnt" daemon-reload || true
     SYSTEMD_OFFLINE=1 systemctl --root "$root_mnt" enable "$service_name" || true
   fi
 }
