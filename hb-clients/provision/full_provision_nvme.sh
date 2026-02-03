@@ -1523,7 +1523,7 @@ TTYVTDisallocate=yes
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 # On first boot, the user from /boot/userconf.txt may not exist yet.
 # Wait briefly so systemd doesn't fail with status=217/USER.
-ExecStartPre=/usr/local/sbin/hb-wait-user.sh ${run_user}
+ExecStartPre=+/usr/local/sbin/hb-wait-user.sh ${run_user}
 EOF
 }
 
