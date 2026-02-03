@@ -1364,6 +1364,31 @@ ensure_user_in_group_root() {
   fi
 }
 
+write_wait_for_user_script_root() {
+  local root_mnt="$1"
+  local script_path="${root_mnt}/usr/local/sbin/hb-wait-user.sh"
+
+  mkdir -p "${root_mnt}/usr/local/sbin"
+  cat > "$script_path" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+user="${1:-}"
+[[ -n "$user" ]] || exit 1
+
+i=0
+while [[ "$i" -lt 60 ]]; do
+  if id -u "$user" >/dev/null 2>&1; then
+    exit 0
+  fi
+  i=$((i + 1))
+  sleep 1
+done
+exit 1
+EOF
+  chmod 0755 "$script_path"
+}
+
 mount_nvme_partitions_for_config() {
   local boot_part="$1"
   local root_part="$2"
@@ -1498,7 +1523,7 @@ TTYVTDisallocate=yes
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 # On first boot, the user from /boot/userconf.txt may not exist yet.
 # Wait briefly so systemd doesn't fail with status=217/USER.
-ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do id -u "${run_user}" >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+ExecStartPre=/usr/local/sbin/hb-wait-user.sh ${run_user}
 EOF
 }
 
@@ -1846,6 +1871,7 @@ main() {
 
   write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country" "$timezone" "$locale" "$screen_w" "$screen_h" "$screen_r" "$screen_rot"
   ensure_user_in_group_root "$HB_ROOT_MNT" "$username" "video"
+  write_wait_for_user_script_root "$HB_ROOT_MNT"
 
   configure_nvme_packages_and_services "$HB_ROOT_MNT" "$locale"
   install_stim2_latest_root "$HB_ROOT_MNT"
