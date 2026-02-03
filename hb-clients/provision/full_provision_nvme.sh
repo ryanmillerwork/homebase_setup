@@ -1322,6 +1322,48 @@ EOF
   fi
 }
 
+ensure_user_in_group_root() {
+  local root_mnt="$1"
+  local user="$2"
+  local group="$3"
+  local group_file="${root_mnt}/etc/group"
+  local gshadow_file="${root_mnt}/etc/gshadow"
+
+  [[ -n "$user" && -n "$group" ]] || return 0
+  [[ -f "$group_file" ]] || return 0
+
+  if ! grep -qE "^${group}:" "$group_file"; then
+    log "WARNING: Group '${group}' not found in ${group_file}; cannot add ${user}."
+    return 0
+  fi
+
+  if grep -qE "^${group}:[^:]*:[^:]*:([^:]*,)?${user}(,|$)" "$group_file"; then
+    :
+  else
+    awk -F: -v g="$group" -v u="$user" 'BEGIN{OFS=":"}
+      $1==g{
+        if ($4=="") $4=u;
+        else if ($4 !~ "(^|,)"u"(,|$)") $4=$4","u
+      }
+      {print}
+    ' "$group_file" > "${group_file}.tmp" && mv "${group_file}.tmp" "$group_file"
+  fi
+
+  if [[ -f "$gshadow_file" ]]; then
+    if grep -qE "^${group}:[^:]*:[^:]*:([^:]*,)?${user}(,|$)" "$gshadow_file"; then
+      :
+    else
+      awk -F: -v g="$group" -v u="$user" 'BEGIN{OFS=":"}
+        $1==g{
+          if ($4=="") $4=u;
+          else if ($4 !~ "(^|,)"u"(,|$)") $4=$4","u
+        }
+        {print}
+      ' "$gshadow_file" > "${gshadow_file}.tmp" && mv "${gshadow_file}.tmp" "$gshadow_file"
+    fi
+  fi
+}
+
 mount_nvme_partitions_for_config() {
   local boot_part="$1"
   local root_part="$2"
@@ -1800,6 +1842,7 @@ main() {
   MONITOR_DISTANCE_CM="$monitor_distance"
 
   write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country" "$timezone" "$locale" "$screen_w" "$screen_h" "$screen_r" "$screen_rot"
+  ensure_user_in_group_root "$HB_ROOT_MNT" "$username" "video"
 
   configure_nvme_packages_and_services "$HB_ROOT_MNT" "$locale"
   install_stim2_latest_root "$HB_ROOT_MNT"
