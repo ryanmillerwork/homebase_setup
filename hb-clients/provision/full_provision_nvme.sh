@@ -1496,6 +1496,9 @@ TTYReset=yes
 TTYVHangup=yes
 TTYVTDisallocate=yes
 Environment=XDG_RUNTIME_DIR=/run/user/%U
+# On first boot, the user from /boot/userconf.txt may not exist yet.
+# Wait briefly so systemd doesn't fail with status=217/USER.
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do id -u "${run_user}" >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
 EOF
 }
 
