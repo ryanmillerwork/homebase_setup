@@ -1388,7 +1388,7 @@ configure_nvme_packages_and_services() {
 
   chroot_cmd /usr/bin/apt-get install -y \
     locales build-essential cmake libevdev-dev libpq-dev libcamera-apps screen git \
-    ca-certificates wget cage labwc libtcl9.0 raspi-config \
+    ca-certificates wget cage labwc libtcl9.0 raspi-config seatd \
     || die "Failed to install packages in NVMe rootfs."
 
   if [[ -n "$locale" ]]; then
@@ -1402,6 +1402,9 @@ configure_nvme_packages_and_services() {
   if [[ -x "${root_mnt}/bin/systemctl" ]]; then
     chroot_cmd /bin/systemctl disable bluetooth || log "WARNING: Failed to disable bluetooth in NVMe rootfs."
     chroot_cmd /bin/systemctl stop bluetooth || log "WARNING: Failed to stop bluetooth in NVMe rootfs."
+    if [[ -f "${root_mnt}/lib/systemd/system/seatd.service" || -f "${root_mnt}/usr/lib/systemd/system/seatd.service" ]]; then
+      chroot_cmd /bin/systemctl enable seatd || log "WARNING: Failed to enable seatd in NVMe rootfs."
+    fi
   fi
 
   unmount_chroot_env "$root_mnt"
@@ -1437,14 +1440,20 @@ write_stim2_service_override_root() {
   mkdir -p "$override_dir"
   cat > "${override_dir}/override.conf" <<EOF
 [Unit]
-After=systemd-user-sessions.service
+After=systemd-user-sessions.service getty@tty1.service
 Wants=systemd-user-sessions.service
+Conflicts=getty@tty1.service
 
 [Service]
 User=${run_user}
 PAMName=login
 TTYPath=/dev/tty1
 StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=yes
 Environment=XDG_RUNTIME_DIR=/run/user/%U
 EOF
 }
@@ -1622,6 +1631,8 @@ install_ess_repo_root() {
   local chroot_env=(/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root DEBIAN_FRONTEND=noninteractive)
   chroot "$root_mnt" "${chroot_env[@]}" /usr/bin/git -C "$systems_dir" clone "$ESS_SOURCE" ess || true
   chroot "$root_mnt" "${chroot_env[@]}" /usr/bin/git config --system --add safe.directory "${systems_dir}/ess" || true
+  # Ensure the lab user owns their home tree for normal git usage.
+  chroot "$root_mnt" "${chroot_env[@]}" /bin/chown -R "${username}:${username}" "/home/${username}" || true
   unmount_chroot_env "$root_mnt"
 
   mkdir -p "${root_mnt}/usr/local/dserv/local"
