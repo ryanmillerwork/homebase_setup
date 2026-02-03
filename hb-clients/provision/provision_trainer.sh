@@ -484,6 +484,24 @@ install_systemd_service() {
   systemctl restart "$service_name" || true
 }
 
+write_stim2_service_override() {
+  detect_run_user
+  local override_dir="/etc/systemd/system/stim2.service.d"
+  mkdir -p "$override_dir"
+  cat > "${override_dir}/override.conf" <<EOF
+[Unit]
+After=systemd-user-sessions.service
+Wants=systemd-user-sessions.service
+
+[Service]
+User=${RUN_USER}
+PAMName=login
+TTYPath=/dev/tty1
+StandardInput=tty
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+EOF
+}
+
 configure_raspi_config() {
   if ! have_cmd raspi-config; then
     log "WARNING: raspi-config not found; skipping console/autologin/wayland setup."
@@ -527,6 +545,7 @@ main() {
   write_monitor_tcl
 
   log "Configuring stim2 systemd service..."
+  write_stim2_service_override
   install_systemd_service /usr/local/stim2/systemd/stim2.service
 
   log "Configuring dserv systemd services..."

@@ -846,10 +846,10 @@ prompt_username_password() {
   local username password input
   while true; do
     if [[ -n "$default_username" ]]; then
-      read -r -p "Enter username to create on the NVMe OS [${default_username}]: " input
+      read -r -p "Enter username [${default_username}]: " input
       username="${input:-$default_username}"
     else
-      read -r -p "Enter username to create on the NVMe OS: " username
+      read -r -p "Enter username: " username
     fi
     if [[ ! "$username" =~ ^[a-z_][a-z0-9_-]*$ ]]; then
       log "Invalid username '$username' (use a-z, 0-9, '_' or '-', must start with a letter or '_')."
@@ -870,10 +870,10 @@ prompt_hostname() {
   local hn default_hn="${1:-}"
   while true; do
     if [[ -n "$default_hn" ]]; then
-      read -r -p "Enter desired hostname for the NVMe OS (default: ${default_hn}): " hn
+      read -r -p "Enter hostname (default: ${default_hn}): " hn
       hn="${hn:-$default_hn}"
     else
-      read -r -p "Enter desired hostname for the NVMe OS: " hn
+      read -r -p "Enter hostname: " hn
     fi
     hn="${hn,,}"
     # Basic hostname validation: 1-63 chars, [a-z0-9-], no leading/trailing '-', no consecutive dots (we disallow dots).
@@ -890,10 +890,10 @@ prompt_wifi_country() {
   local cc default_cc="${1:-}"
   while true; do
     if [[ -n "$default_cc" ]]; then
-      read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP). Default: ${default_cc}: " cc
+      read -r -p "Enter Wi-Fi country code (2 letters, e.g. US, CA, GB, DE, FR, JP). Default: ${default_cc}: " cc
       cc="${cc:-$default_cc}"
     else
-      read -r -p "Enter Wi-Fi country code for NVMe OS (2 letters, e.g. US, CA, GB, DE, FR, JP). Default: US: " cc
+      read -r -p "Enter Wi-Fi country code (2 letters, e.g. US, CA, GB, DE, FR, JP). Default: US: " cc
       cc="${cc:-US}"
     fi
     cc="${cc^^}"
@@ -910,10 +910,10 @@ prompt_timezone() {
   local tz default_tz="${1:-}"
   while true; do
     if [[ -n "$default_tz" ]]; then
-      read -r -p "Enter timezone for NVMe OS (e.g. America/New_York, America/Los_Angeles, Europe/London, Asia/Tokyo). Default: ${default_tz}. Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones : " tz
+      read -r -p "Enter timezone (default: ${default_tz}): " tz
       tz="${tz:-$default_tz}"
     else
-      read -r -p "Enter timezone for NVMe OS (e.g. America/New_York, America/Los_Angeles, Europe/London, Asia/Tokyo). Default: America/New_York. Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones : " tz
+      read -r -p "Enter timezone (default: America/New_York): " tz
       tz="${tz:-America/New_York}"
     fi
     if [[ -f "/usr/share/zoneinfo/${tz}" ]]; then
@@ -929,10 +929,10 @@ prompt_locale() {
   local loc base default_loc="${1:-}"
   while true; do
     if [[ -n "$default_loc" ]]; then
-      read -r -p "Enter locale for NVMe OS (e.g. en_us, en_gb, fr_fr, de_de). Default: ${default_loc}. Full list: https://sourceware.org/glibc/wiki/Locales : " loc
+      read -r -p "Enter locale (default: ${default_loc}): " loc
       loc="${loc:-$default_loc}"
     else
-      read -r -p "Enter locale for NVMe OS (e.g. en_us, en_gb, fr_fr, de_de). Default: en_us. Full list: https://sourceware.org/glibc/wiki/Locales : " loc
+      read -r -p "Enter locale (default: en_us): " loc
       loc="${loc:-en_us}"
     fi
     loc="$(echo "$loc" | tr 'A-Z' 'a-z')"

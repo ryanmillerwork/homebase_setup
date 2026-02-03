@@ -1413,6 +1413,28 @@ enable_systemd_service_root() {
   fi
 }
 
+write_stim2_service_override_root() {
+  local root_mnt="$1"
+  local run_user="$2"
+
+  [[ -n "$run_user" ]] || return 0
+
+  local override_dir="${root_mnt}/etc/systemd/system/stim2.service.d"
+  mkdir -p "$override_dir"
+  cat > "${override_dir}/override.conf" <<EOF
+[Unit]
+After=systemd-user-sessions.service
+Wants=systemd-user-sessions.service
+
+[Service]
+User=${run_user}
+PAMName=login
+TTYPath=/dev/tty1
+StandardInput=tty
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+EOF
+}
+
 write_monitor_tcl_root() {
   local root_mnt="$1"
   local monitor_dir monitor_file
@@ -1747,6 +1769,7 @@ main() {
 
   configure_nvme_packages_and_services "$HB_ROOT_MNT" "$locale"
   install_stim2_latest_root "$HB_ROOT_MNT"
+  write_stim2_service_override_root "$HB_ROOT_MNT" "$username"
   install_dserv_latest_root "$HB_ROOT_MNT"
   install_dlsh_latest_root "$HB_ROOT_MNT"
   install_ess_repo_root "$HB_ROOT_MNT" "$username"
