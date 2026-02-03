@@ -52,7 +52,7 @@ ini_list_sections() {
 
 ini_list_device_sections() {
   local file="$1"
-  ini_list_sections "$file" | grep -v '\.meta$' || true
+  ini_list_sections "$file" | awk -F. 'NF>=3' || true
 }
 
 ini_list_groups() {
@@ -200,7 +200,7 @@ load_defaults() {
   log "Using defaults section: $DEFAULTS_SECTION"
 
   local group="${DEFAULTS_SECTION%.*}"
-  local meta="${group}.meta"
+  local meta="${group}"
   if ini_section_exists "$DEFAULTS_FILE" "$meta"; then
     local ess_source
     ess_source="$(ini_get "$DEFAULTS_FILE" "$meta" "ess_source")"

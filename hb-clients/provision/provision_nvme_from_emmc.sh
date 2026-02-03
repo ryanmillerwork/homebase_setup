@@ -71,7 +71,7 @@ ini_list_sections() {
 
 ini_list_device_sections() {
   local file="$1"
-  ini_list_sections "$file" | grep -v '\.meta$' || true
+  ini_list_sections "$file" | awk -F. 'NF>=3' || true
 }
 
 ini_list_groups() {
