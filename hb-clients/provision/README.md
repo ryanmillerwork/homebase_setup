@@ -1,27 +1,30 @@
-# provision_nvme_from_emmc
+# full_provision_nvme
 
-Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while booted from **eMMC/mmc**, by flashing **`raspios_lite_arm64_latest`** to NVMe and applying minimal “headless” config (SSH + user + Wi-Fi), then switching EEPROM boot order to NVMe-first and rebooting.
+Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while booted from **eMMC/mmc**, by flashing **`raspios_lite_arm64_latest`** to NVMe, applying headless config (SSH + user + Wi‑Fi), installing stim2/dserv/dlsh/ess, and switching EEPROM boot order to NVMe-first before rebooting.
 
 ## What it does
 
 - **Validates**: Bookworm+; root filesystem is on an `mmcblk*` device; NVMe disk exists.
-- **Prompts for Wi-Fi first (always)**: it asks for SSID/password up front, attempts to connect the *current* system via `nmcli`, and verifies internet reachability. If no internet is detected, you can choose to continue anyway.
-- **Prompts for region + locale**: Wi‑Fi country code, timezone, locale (with defaults and validation).
+- **Prompts for Wi-Fi first (always)**: it asks for SSID/password up front, attempts to connect the *current* system via `nmcli`, and verifies internet reachability (required for downloads).
+- **Prompts for region + locale + display**: Wi‑Fi country code, timezone, locale, optional screen mode/rotation, and monitor geometry.
 - **Installs packages**: `wget`, `xz-utils`, `openssl`, `iw`, `network-manager`, `rpi-eeprom`, etc.
 - **Flashes**: downloads `raspios_lite_arm64_latest` and streams it to the NVMe via `xzcat | dd`.
 - **Configures on the NVMe image**:
   - enables SSH (creates `ssh` on the boot partition)
   - creates user/password (writes `userconf.txt` on the boot partition)
   - configures Wi-Fi for the installed NVMe OS (creates a NetworkManager `*.nmconnection` profile in the NVMe **rootfs**)
-  - ensures Wi‑Fi is enabled by default (`/etc/NetworkManager/conf.d/10-wifi-enabled.conf`)
+  - ensures Wi‑Fi is enabled by default (`/var/lib/NetworkManager/NetworkManager.state`)
   - prompts for a **hostname** and writes it into the NVMe rootfs (`/etc/hostname` + `/etc/hosts`)
   - sets timezone + locale (and keyboard layout for US/GB)
   - ensures `dtparam=pciex1=on` and `dtparam=ant2` in NVMe `config.txt` (if present)
   - disables camera auto‑detect and applies `dtoverlay=imx708`
-  - propagates display rotation if the current system uses a `video=...rotate=180` kernel arg
+  - sets display mode/rotation in `cmdline.txt` (if screen values are provided)
   - copies `/etc/udev/rules.d/99-touchscreen-rotate.rules` if present
   - expands the NVMe rootfs to fill the disk
 - **Updates NVMe OS packages** (in chroot): full upgrade, installs dev tools + `libcamera-apps`, disables bluetooth.
+- **Installs stim2/dserv/dlsh + ESS repo** in the NVMe rootfs and enables their systemd services.
+- **Configures kiosk settings** via `raspi-config` (console autologin + Wayland).
+- **Configures seatd + stim2 startup delay** to avoid libseat/DRM timing issues at boot.
 - **Sets EEPROM boot order**: best-effort non-interactive edit to `BOOT_ORDER=0xf416` and `PCIE_PROBE=1`.
 - **Reboots**.
 
@@ -30,7 +33,7 @@ Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while bo
 Copy the script to the Pi and run:
 
 ```bash
-sudo ./provision_nvme_from_emmc.sh
+sudo ./full_provision_nvme.sh
 ```
 
 You will be prompted to:
@@ -39,8 +42,10 @@ You will be prompted to:
 - enter Wi-Fi country code (2 letters, e.g. `US`, `CA`, `GB`, `DE`, `FR`, `JP`) to avoid rfkill block warning on first boot (default `US`)
 - enter timezone (default `America/New_York`)
 - enter locale (e.g. `en_us`, `en_gb`, `fr_fr`)
+- enter optional screen pixel width/height/refresh + rotation
 - enter hostname (defaults to current system hostname)
 - enter a username/password for first boot
+- enter monitor geometry (cm) for stim2 calibration
 - choose the NVMe disk (if there are multiple)
 - type **`ERASE`** to confirm destroying that disk
 
@@ -48,6 +53,8 @@ You will be prompted to:
 
 - This script is **destructive** to the selected NVMe disk.
 - “Running on eMMC” is checked via `mmcblk*` root device **plus** a heuristic for `/dev/mmcblk*boot0`. If you really are on microSD, the script will ask you to **type `YES`** to proceed.
+- The script requires internet connectivity to fetch packages and releases. If Wi‑Fi/ethernet is unavailable, it will abort.
+- Provision logs are saved to `/var/log/provision/full_provision_nvme_YYYYMMDD_HHMMSS.log` on the NVMe rootfs.
 
 ## stim2 trainer provisioning
 

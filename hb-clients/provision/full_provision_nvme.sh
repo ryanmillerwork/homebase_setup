@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Provision an NVMe boot drive from a running Raspberry Pi OS system (Bookworm+),
+# Provision an NVMe boot drive while running from eMMC/microSD (Bookworm+),
 # install stim2/dserv/dlsh/ess into the NVMe rootfs, and configure kiosk defaults.
+# This script is intended to fully provision the NVMe target (not run from NVMe).
 #
 # Flow:
-# - Prompt for all inputs (defaults from device_defaults.ini)
-# - Connect Wi-Fi (if provided), verify internet
-# - Provision NVMe with Raspberry Pi OS Lite arm64
-# - Configure SSH/user/hostname/Wi-Fi/timezone/locale + display settings
-# - Install stim2/dserv/dlsh + ess repo in NVMe rootfs
-# - Enable services + kiosk settings in NVMe rootfs
+# - Self-update from git when internet is available
+# - Prompt for inputs (with defaults from device_defaults.ini)
+# - Configure Wi-Fi (optional) and verify internet connectivity
+# - Flash Raspberry Pi OS Lite arm64 to NVMe and expand the root filesystem
+# - Configure headless settings: SSH, user, hostname, Wi-Fi, timezone, locale
+# - Configure display mode/rotation and monitor geometry
+# - Install stim2/dserv/dlsh + ESS repo in NVMe rootfs
+# - Enable services, kiosk settings, and seatd (with stim2 startup delay)
 # - Configure EEPROM boot order to prefer NVMe
 # - Reboot
 
