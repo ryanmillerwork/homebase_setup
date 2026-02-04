@@ -1049,7 +1049,7 @@ download_image_xz() {
   fi
 
   log "Downloading latest Raspberry Pi OS Lite arm64 image (.xz) from $url ..."
-  wget -O "$out_xz" "$url"
+  wget --progress=bar:force:noscroll -O "$out_xz" "$url"
 
   remote_meta > "$meta" 2>/dev/null || true
 }
@@ -1442,7 +1442,7 @@ configure_nvme_packages_and_services() {
 
   chroot_cmd /usr/bin/apt-get install -y \
     locales build-essential cmake libevdev-dev libpq-dev libcamera-apps screen git \
-    ca-certificates wget cage labwc libtcl9.0 raspi-config \
+    ca-certificates wget cage labwc libtcl9.0 raspi-config lightdm \
     || die "Failed to install packages in NVMe rootfs."
 
   if [[ -n "$locale" ]]; then
