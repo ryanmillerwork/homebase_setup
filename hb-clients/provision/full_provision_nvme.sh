@@ -19,6 +19,7 @@ HB_WIFI_SCAN_FILE="/tmp/hb_wifi_scan_ssids.txt"
 HB_SELFUPDATED="${HB_SELFUPDATED:-0}"
 HB_POST_UPDATE_ATTEMPTED="${HB_POST_UPDATE_ATTEMPTED:-0}"
 HB_SELFUPDATE_NO_INTERNET="${HB_SELFUPDATE_NO_INTERNET:-0}"
+HB_LOG_FILE=""
 
 DEFAULTS_FILE=""
 DEFAULTS_SECTION=""
@@ -60,6 +61,41 @@ log() {
   fi
 }
 
+setup_logging() {
+  if [[ -n "$HB_LOG_FILE" ]]; then
+    return 0
+  fi
+
+  HB_LOG_FILE="$(mktemp -p /tmp full_provision_nvme.XXXXXX.log)"
+  exec > >(tee -a "$HB_LOG_FILE") 2>&1
+  log "Logging to $HB_LOG_FILE"
+}
+
+save_provision_log() {
+  if [[ -z "$HB_LOG_FILE" || ! -f "$HB_LOG_FILE" ]]; then
+    log "WARNING: Provision log file not found; skipping copy to NVMe."
+    return 0
+  fi
+  if [[ -z "$HB_ROOT_MNT" || ! -d "$HB_ROOT_MNT" ]]; then
+    log "WARNING: NVMe root mount not available; skipping log copy."
+    return 0
+  fi
+
+  local log_dir log_date log_dest
+  log_dir="$HB_ROOT_MNT/var/log/provision"
+  if ! mkdir -p "$log_dir"; then
+    log "WARNING: Failed to create $log_dir; skipping log copy."
+    return 0
+  fi
+
+  log_date="$(date +%Y%m%d_%H%M%S)"
+  log_dest="$log_dir/full_provision_nvme_${log_date}.log"
+  if ! cp -f "$HB_LOG_FILE" "$log_dest"; then
+    log "WARNING: Failed to copy provision log to $log_dest"
+    return 0
+  fi
+  log "Saved provision log to $log_dest"
+}
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "Missing required command: $1"
 }
@@ -1687,6 +1723,7 @@ EOF
 }
 
 main() {
+  setup_logging
   require_root
   load_defaults
 
@@ -1801,6 +1838,8 @@ main() {
   enable_systemd_service_root "$HB_ROOT_MNT" "/usr/local/dserv/systemd/dserv-agent.service"
 
   configure_raspi_config_root "$HB_ROOT_MNT"
+
+  save_provision_log
 
   cleanup_mounts "$HB_BOOT_MNT" "$HB_ROOT_MNT"
   trap - EXIT
