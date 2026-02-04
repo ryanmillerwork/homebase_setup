@@ -1442,7 +1442,7 @@ configure_nvme_packages_and_services() {
 
   chroot_cmd /usr/bin/apt-get install -y \
     locales build-essential cmake libevdev-dev libpq-dev libcamera-apps screen git \
-    ca-certificates wget cage labwc libtcl9.0 raspi-config lightdm \
+    ca-certificates wget cage labwc libtcl9.0 raspi-config lightdm seatd \
     || die "Failed to install packages in NVMe rootfs."
 
   if [[ -n "$locale" ]]; then
@@ -1456,6 +1456,7 @@ configure_nvme_packages_and_services() {
   if [[ -x "${root_mnt}/bin/systemctl" ]]; then
     chroot_cmd /bin/systemctl disable bluetooth || log "WARNING: Failed to disable bluetooth in NVMe rootfs."
     chroot_cmd /bin/systemctl stop bluetooth || log "WARNING: Failed to stop bluetooth in NVMe rootfs."
+    SYSTEMD_OFFLINE=1 systemctl --root "$root_mnt" enable seatd.service || log "WARNING: Failed to enable seatd in NVMe rootfs."
   fi
 
   unmount_chroot_env "$root_mnt"
@@ -1478,6 +1479,23 @@ enable_systemd_service_root() {
   if command -v systemctl >/dev/null 2>&1; then
     SYSTEMD_OFFLINE=1 systemctl --root "$root_mnt" enable "$service_name" || true
   fi
+}
+
+write_stim2_service_override_root() {
+  local root_mnt="$1"
+  local override_dir="${root_mnt}/etc/systemd/system/stim2.service.d"
+  local override_file="${override_dir}/override.conf"
+
+  mkdir -p "$override_dir"
+  cat > "$override_file" <<'EOF'
+[Unit]
+After=systemd-logind.service seatd.service
+Wants=seatd.service
+
+[Service]
+Environment=LIBSEAT_BACKEND=seatd
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -e /dev/dri/card0 ] && exit 0; sleep 1; done; exit 1'
+EOF
 }
 
 write_monitor_tcl_root() {
@@ -1836,6 +1854,7 @@ main() {
   enable_systemd_service_root "$HB_ROOT_MNT" "/usr/local/stim2/systemd/stim2.service"
   enable_systemd_service_root "$HB_ROOT_MNT" "/usr/local/dserv/systemd/dserv.service"
   enable_systemd_service_root "$HB_ROOT_MNT" "/usr/local/dserv/systemd/dserv-agent.service"
+  write_stim2_service_override_root "$HB_ROOT_MNT"
 
   configure_raspi_config_root "$HB_ROOT_MNT"
 
