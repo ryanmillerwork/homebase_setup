@@ -1364,29 +1364,22 @@ ensure_user_in_group_root() {
   fi
 }
 
-write_wait_for_user_script_root() {
+ensure_user_exists_root() {
   local root_mnt="$1"
-  local script_path="${root_mnt}/usr/local/sbin/hb-wait-user.sh"
+  local username="$2"
+  local password="$3"
 
-  mkdir -p "${root_mnt}/usr/local/sbin"
-  cat > "$script_path" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
+  [[ -n "$username" && -n "$password" ]] || return 0
 
-user="${1:-}"
-[[ -n "$user" ]] || exit 1
-
-i=0
-while [[ "$i" -lt 60 ]]; do
-  if id -u "$user" >/dev/null 2>&1; then
-    exit 0
+  mount_chroot_env "$root_mnt"
+  local chroot_env=(/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=/root DEBIAN_FRONTEND=noninteractive)
+  if ! chroot "$root_mnt" "${chroot_env[@]}" /usr/bin/id -u "$username" >/dev/null 2>&1; then
+    chroot "$root_mnt" "${chroot_env[@]}" /usr/sbin/useradd -m -s /bin/bash "$username" || true
+    chroot "$root_mnt" "${chroot_env[@]}" /usr/sbin/usermod -aG sudo "$username" || true
+    printf '%s:%s\n' "$username" "$password" \
+      | chroot "$root_mnt" "${chroot_env[@]}" /usr/sbin/chpasswd || true
   fi
-  i=$((i + 1))
-  sleep 1
-done
-exit 1
-EOF
-  chmod 0755 "$script_path"
+  unmount_chroot_env "$root_mnt"
 }
 
 mount_nvme_partitions_for_config() {
@@ -1521,9 +1514,6 @@ TTYReset=yes
 TTYVHangup=yes
 TTYVTDisallocate=yes
 Environment=XDG_RUNTIME_DIR=/run/user/%U
-# On first boot, the user from /boot/userconf.txt may not exist yet.
-# Wait briefly so systemd doesn't fail with status=217/USER.
-ExecStartPre=+/usr/local/sbin/hb-wait-user.sh ${run_user}
 EOF
 }
 
@@ -1870,8 +1860,8 @@ main() {
   MONITOR_DISTANCE_CM="$monitor_distance"
 
   write_headless_config "$HB_BOOT_MNT" "$HB_ROOT_MNT" "$username" "$password" "$wifi_ssid" "$wifi_pass" "$hostname" "$wifi_country" "$timezone" "$locale" "$screen_w" "$screen_h" "$screen_r" "$screen_rot"
+  ensure_user_exists_root "$HB_ROOT_MNT" "$username" "$password"
   ensure_user_in_group_root "$HB_ROOT_MNT" "$username" "video"
-  write_wait_for_user_script_root "$HB_ROOT_MNT"
 
   configure_nvme_packages_and_services "$HB_ROOT_MNT" "$locale"
   install_stim2_latest_root "$HB_ROOT_MNT"
