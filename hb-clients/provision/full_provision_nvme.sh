@@ -274,12 +274,19 @@ load_defaults() {
     local ess_source
     ess_source="$(ini_get "$DEFAULTS_FILE" "$meta" "ess_source")"
     [[ -n "$ess_source" ]] && ESS_SOURCE="$ess_source"
-    local mesh_host mesh_workgroup
-    mesh_host="$(ini_get "$DEFAULTS_FILE" "$meta" "mesh_host")"
-    mesh_workgroup="$(ini_get "$DEFAULTS_FILE" "$meta" "mesh_workgroup")"
-    [[ -n "$mesh_host" ]] && DEFAULT_MESH_HOST="$mesh_host"
-    [[ -n "$mesh_workgroup" ]] && DEFAULT_MESH_WORKGROUP="$mesh_workgroup"
   fi
+
+  local mesh_host mesh_workgroup
+  mesh_host="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "mesh_host")"
+  mesh_workgroup="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "mesh_workgroup")"
+  if [[ -z "$mesh_host" && -n "$meta" ]] && ini_section_exists "$DEFAULTS_FILE" "$meta"; then
+    mesh_host="$(ini_get "$DEFAULTS_FILE" "$meta" "mesh_host")"
+  fi
+  if [[ -z "$mesh_workgroup" && -n "$meta" ]] && ini_section_exists "$DEFAULTS_FILE" "$meta"; then
+    mesh_workgroup="$(ini_get "$DEFAULTS_FILE" "$meta" "mesh_workgroup")"
+  fi
+  [[ -n "$mesh_host" ]] && DEFAULT_MESH_HOST="$mesh_host"
+  [[ -n "$mesh_workgroup" ]] && DEFAULT_MESH_WORKGROUP="$mesh_workgroup"
 
   local val
   val="$(ini_get "$DEFAULTS_FILE" "$DEFAULTS_SECTION" "username")"
