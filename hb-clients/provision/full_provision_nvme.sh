@@ -14,6 +14,7 @@ set -euo pipefail
 # - Configure display mode/rotation and monitor geometry
 # - Install stim2/dserv/dlsh + ESS repo in NVMe rootfs
 # - Enable services, kiosk settings, and seatd (with stim2 startup delay)
+# - Save full log to /var/log/provision/full_provision_nvme_YYYYMMDD_HHMMSS.log on NVMe rootfs
 # - Configure EEPROM boot order to prefer NVMe
 # - Reboot
 
@@ -1501,6 +1502,21 @@ ExecStartPre=/bin/bash -c 'for i in $(seq 1 30); do [ -e /dev/dri/card0 ] && exi
 EOF
 }
 
+write_dserv_agent_override_root() {
+  local root_mnt="$1"
+  [[ -n "$DEFAULT_MESH_HOST" && -n "$DEFAULT_MESH_WORKGROUP" ]] || return 0
+
+  local override_dir="${root_mnt}/etc/systemd/system/dserv-agent.service.d"
+  local override_file="${override_dir}/override.conf"
+
+  mkdir -p "$override_dir"
+  cat > "$override_file" <<EOF
+[Service]
+ExecStart=
+ExecStart=/usr/local/bin/dserv-agent --registry ${DEFAULT_MESH_HOST} --workgroup ${DEFAULT_MESH_WORKGROUP} --no-tls -allow-reboot -components /usr/local/dserv/config/components.json
+EOF
+}
+
 write_monitor_tcl_root() {
   local root_mnt="$1"
   local monitor_dir monitor_file
@@ -1858,6 +1874,7 @@ main() {
   enable_systemd_service_root "$HB_ROOT_MNT" "/usr/local/dserv/systemd/dserv.service"
   enable_systemd_service_root "$HB_ROOT_MNT" "/usr/local/dserv/systemd/dserv-agent.service"
   write_stim2_service_override_root "$HB_ROOT_MNT"
+  write_dserv_agent_override_root "$HB_ROOT_MNT"
 
   configure_raspi_config_root "$HB_ROOT_MNT"
 

@@ -9,6 +9,7 @@ Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while bo
 - **Prompts for region + locale + display**: Wi‑Fi country code, timezone, locale, optional screen mode/rotation, and monitor geometry.
 - **Installs packages**: `wget`, `xz-utils`, `openssl`, `iw`, `network-manager`, `rpi-eeprom`, etc.
 - **Flashes**: downloads `raspios_lite_arm64_latest` and streams it to the NVMe via `xzcat | dd`.
+- **Logs**: writes a full provisioning log to `/var/log/provision/full_provision_nvme_YYYYMMDD_HHMMSS.log` on the NVMe rootfs.
 - **Configures on the NVMe image**:
   - enables SSH (creates `ssh` on the boot partition)
   - creates user/password (writes `userconf.txt` on the boot partition)
