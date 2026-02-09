@@ -936,7 +936,7 @@ strip_partition_suffix() {
   fi
 }
 
-check_root_on_emmc_and_nvme_present() {
+check_root_on_fallback_and_nvme_present() {
   local root_src root_dev
   root_src="$(root_source)"
   root_dev="$(strip_partition_suffix "$root_src")"
@@ -944,16 +944,22 @@ check_root_on_emmc_and_nvme_present() {
   log "Root filesystem source: $root_src"
   log "Root block device: $root_dev"
 
-  if [[ "$root_dev" != /dev/mmcblk* ]]; then
-    die "Root is not on an mmc device (expected eMMC/mmc). Root device: $root_dev"
-  fi
-
-  if ! compgen -G "/dev/mmcblk*boot0" >/dev/null; then
-    log "WARNING: Could not find /dev/mmcblk*boot0; this may be microSD rather than eMMC."
-    local ans
-    read -r -p "Proceed anyway? Type YES to continue: " ans
-    [[ "$ans" == "YES" ]] || die "Aborting due to non-eMMC heuristic."
-  fi
+  case "$root_dev" in
+    /dev/mmcblk*)
+      if ! compgen -G "/dev/mmcblk*boot0" >/dev/null; then
+        log "WARNING: Could not find /dev/mmcblk*boot0; this may be microSD rather than eMMC."
+        local ans
+        read -r -p "Proceed anyway? Type YES to continue: " ans
+        [[ "$ans" == "YES" ]] || die "Aborting due to non-eMMC heuristic."
+      fi
+      ;;
+    /dev/sd*)
+      log "Running from ${root_dev} (USB/SCSI block device) as fallback source."
+      ;;
+    *)
+      die "Root is not on a supported fallback device (expected eMMC/microSD or USB block device). Root device: $root_dev"
+      ;;
+  esac
 
   if ! lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}' | grep -q '^nvme'; then
     die "No NVMe disk detected (expected /dev/nvme*)."
@@ -1819,7 +1825,7 @@ main() {
   monitor_distance="$MONITOR_DISTANCE_CM"
 
   check_bookworm_or_later
-  check_root_on_emmc_and_nvme_present
+  check_root_on_fallback_and_nvme_present
   nvme_dev="$(pick_nvme_device)"
   [[ -b "$nvme_dev" ]] || die "Not a block device: $nvme_dev"
   confirm_erase_device "$nvme_dev"

@@ -1,10 +1,10 @@
 # full_provision_nvme
 
-Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while booted from **eMMC/mmc**, by flashing **`raspios_lite_arm64_latest`** to NVMe, applying headless config (SSH + user + Wi‑Fi), installing stim2/dserv/dlsh/ess, and switching EEPROM boot order to NVMe-first before rebooting.
+Provision an NVMe boot drive on **Raspberry Pi OS Bookworm (or later)** while booted from **fallback media (eMMC/microSD/USB)**, by flashing **`raspios_lite_arm64_latest`** to NVMe, applying headless config (SSH + user + Wi‑Fi), installing stim2/dserv/dlsh/ess, and switching EEPROM boot order to NVMe-first before rebooting.
 
 ## What it does
 
-- **Validates**: Bookworm+; root filesystem is on an `mmcblk*` device; NVMe disk exists.
+- **Validates**: Bookworm+; root filesystem is on fallback media (`mmcblk*` or `/dev/sd*`); NVMe disk exists.
 - **Prompts for Wi-Fi first (always)**: it asks for SSID/password up front, attempts to connect the *current* system via `nmcli`, and verifies internet reachability (required for downloads).
 - **Prompts for region + locale + display**: Wi‑Fi country code, timezone, locale, optional screen mode/rotation, and monitor geometry.
 - **Installs packages**: `wget`, `xz-utils`, `openssl`, `iw`, `network-manager`, `rpi-eeprom`, etc.
@@ -53,7 +53,7 @@ You will be prompted to:
 ## Notes / caveats
 
 - This script is **destructive** to the selected NVMe disk.
-- “Running on eMMC” is checked via `mmcblk*` root device **plus** a heuristic for `/dev/mmcblk*boot0`. If you really are on microSD, the script will ask you to **type `YES`** to proceed.
+- If running from `mmcblk*`, a heuristic checks for `/dev/mmcblk*boot0` to detect eMMC. If you are on microSD, the script asks you to **type `YES`** to proceed.
 - The script requires internet connectivity to fetch packages and releases. If Wi‑Fi/ethernet is unavailable, it will abort.
 - Provision logs are saved to `/var/log/provision/full_provision_nvme_YYYYMMDD_HHMMSS.log` on the NVMe rootfs.
 
@@ -82,21 +82,21 @@ Run it on the target Pi:
 sudo ./provision_trainer.sh
 ```
 
-## eMMC fallback provisioning
+## Fallback media provisioning
 
-`provision_emmc_for_nvme_fallback.sh` installs the **desktop** Raspberry Pi OS image to eMMC and prepares it to auto-run NVMe provisioning on every boot. It:
+`provision_fallback.sh` installs the **desktop** Raspberry Pi OS image to fallback media (eMMC, microSD, or USB) and prepares it to auto-run NVMe provisioning on every boot. It:
 
-- downloads `raspios_arm64_latest` and flashes it to eMMC
+- downloads `raspios_arm64_latest` and flashes it to the selected fallback disk
 - creates the default `provision/provision` user
 - enables SSH on first boot
 - enables passwordless sudo for that user
-- prompts for a hostname and writes it to the eMMC rootfs
+- prompts for a hostname and writes it to the fallback rootfs
 - sets `dtparam=pciex1=on` and `dtparam=ant2`
-- clones `https://github.com/ryanmillerwork/homebase_setup` onto the eMMC image
-- sets desktop autostart to run `sudo ./provision_nvme_from_emmc.sh` in a terminal on every boot
+- clones `https://github.com/ryanmillerwork/homebase_setup` onto the fallback image
+- sets desktop autostart to run `sudo ./full_provision_nvme.sh` in a terminal on every boot
 
-Run it from **NVMe or microSD** (it refuses to overwrite the current root device):
+Run it from **NVMe or another non-target boot medium** (it refuses to overwrite the current root device):
 
 ```bash
-sudo ./provision_emmc_for_nvme_fallback.sh
+sudo ./provision_fallback.sh
 ```

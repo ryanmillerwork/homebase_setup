@@ -770,7 +770,7 @@ write_fallback_config() {
     fi
   fi
 
-  # Ensure PCIe is enabled so NVMe is visible when booted from eMMC.
+  # Ensure PCIe is enabled so NVMe is visible when booted from fallback media.
   local cfg="${boot_mnt}/config.txt"
   if [[ -f "$cfg" ]]; then
     if ! grep -qE '^\s*dtparam=pciex1(=on)?\s*$' "$cfg"; then
@@ -816,7 +816,7 @@ Terminal=false
 X-GNOME-Autostart-enabled=true
 EOF
 
-  # Clone repo onto the eMMC image.
+  # Clone repo onto the fallback image.
   local repo_dir="${home_dir}/homebase_setup"
   rm -rf "$repo_dir"
   git clone --depth 1 https://github.com/ryanmillerwork/homebase_setup.git "$repo_dir"
