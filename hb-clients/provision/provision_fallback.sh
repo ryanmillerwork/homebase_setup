@@ -488,6 +488,25 @@ confirm_erase_device() {
   [[ "$answer" == "ERASE" ]] || die "User did not confirm ERASE."
 }
 
+ensure_fallback_device_capacity() {
+  local dev="$1"
+  local min_bytes="4300000000"
+  local min_human="4.3 GB"
+  local dev_bytes dev_size_human
+
+  dev_bytes="$(lsblk -bdn -o SIZE "$dev" 2>/dev/null | head -n1 || true)"
+  dev_size_human="$(lsblk -dn -o SIZE "$dev" 2>/dev/null | head -n1 || true)"
+  [[ -n "$dev_bytes" && "$dev_bytes" =~ ^[0-9]+$ ]] || return 0
+
+  if [[ "$dev_bytes" -lt "$min_bytes" ]]; then
+    die "Selected fallback disk $dev is too small (${dev_size_human:-${dev_bytes} bytes}). 4GB media is not sufficient for the Raspberry Pi OS desktop image. Use at least 8GB."
+  fi
+
+  if [[ "$dev_bytes" -lt 8000000000 ]]; then
+    log "WARNING: Selected fallback disk $dev is ${dev_size_human:-${dev_bytes} bytes}. 8GB+ is recommended for reliable provisioning."
+  fi
+}
+
 install_packages() {
   need_cmd apt-get
   log "Installing required packages..."
@@ -885,6 +904,7 @@ main() {
   if [[ "$fallback_dev" == "$root_dev" ]]; then
     die "Refusing to overwrite the current root device ($root_dev). Boot from NVMe or SD and retry."
   fi
+  ensure_fallback_device_capacity "$fallback_dev"
 
   confirm_erase_device "$fallback_dev"
 
