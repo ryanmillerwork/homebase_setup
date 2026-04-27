@@ -17,6 +17,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import tkinter as tk
 from tkinter import messagebox
@@ -131,6 +132,90 @@ def run_command(cmd, timeout=30, env=None):
             exc.stdout or "",
             exc.stderr or f"Timed out running: {' '.join(cmd)}",
         )
+
+
+def have_internet():
+    for host, port in [
+        ("1.1.1.1", 443),
+        ("1.0.0.1", 443),
+        ("93.184.216.34", 80),
+    ]:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        try:
+            sock.connect((host, port))
+            return True
+        except OSError:
+            continue
+        finally:
+            sock.close()
+    return False
+
+
+def git_command(repo_root, args, timeout=45):
+    return run_command(["git", "-C", str(repo_root), *args], timeout=timeout)
+
+
+def update_current_repo_if_needed(script_path):
+    if shutil.which("git") is None:
+        return {"ok": False, "updated": False, "message": "git is not available."}
+
+    script_dir = Path(script_path).resolve().parent
+    result = run_command(["git", "-C", str(script_dir), "rev-parse", "--show-toplevel"], timeout=10)
+    if result.returncode != 0:
+        return {
+            "ok": False,
+            "updated": False,
+            "message": f"Could not determine repository root: {result.stderr.strip() or result.stdout.strip()}",
+        }
+    repo_root = Path(result.stdout.strip())
+
+    origin_head_result = git_command(repo_root, ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"], timeout=10)
+    origin_head = origin_head_result.stdout.strip() if origin_head_result.returncode == 0 else "origin/main"
+
+    before_result = git_command(repo_root, ["rev-parse", "HEAD"], timeout=10)
+    if before_result.returncode != 0:
+        return {"ok": False, "updated": False, "message": "Could not read current git revision."}
+    before = before_result.stdout.strip()
+
+    fetch_result = git_command(repo_root, ["fetch", "--prune"], timeout=90)
+    if fetch_result.returncode != 0:
+        return {
+            "ok": False,
+            "updated": False,
+            "message": f"git fetch failed: {fetch_result.stderr.strip() or fetch_result.stdout.strip()}",
+        }
+
+    target_result = git_command(repo_root, ["rev-parse", origin_head], timeout=10)
+    if target_result.returncode != 0:
+        return {"ok": False, "updated": False, "message": f"Could not resolve {origin_head}."}
+    target = target_result.stdout.strip()
+    if before == target:
+        return {"ok": True, "updated": False, "message": "Already up to date."}
+
+    dirty_result = git_command(repo_root, ["status", "--porcelain"], timeout=10)
+    if dirty_result.returncode == 0 and dirty_result.stdout.strip():
+        return {
+            "ok": False,
+            "updated": False,
+            "message": "The local checkout has uncommitted changes, so the GUI did not update automatically.",
+        }
+
+    merge_result = git_command(repo_root, ["merge", "--ff-only", origin_head], timeout=90)
+    if merge_result.returncode != 0:
+        return {
+            "ok": False,
+            "updated": False,
+            "message": f"git update failed: {merge_result.stderr.strip() or merge_result.stdout.strip()}",
+        }
+
+    after_result = git_command(repo_root, ["rev-parse", "HEAD"], timeout=10)
+    after = after_result.stdout.strip() if after_result.returncode == 0 else ""
+    return {
+        "ok": True,
+        "updated": bool(after and after != before),
+        "message": f"Updated from {before[:7]} to {after[:7] or target[:7]}.",
+    }
 
 
 def nmcli(args, timeout=30):
@@ -349,6 +434,9 @@ class ProvisioningWizard(tk.Tk):
         self.geometry("1280x800")
 
         self.output_path = output_path
+        self._self_update_retry_needed = False
+        self._maybe_self_update("startup")
+
         self.defaults_path = Path(os.environ.get("DEVICE_DEFAULTS_FILE", script_defaults_file()))
         self.config = load_defaults_config(self.defaults_path)
         self.groups = device_groups(self.config)
@@ -647,6 +735,41 @@ class ProvisioningWizard(tk.Tk):
         dialog.grab_release()
         dialog.destroy()
         return choice
+
+    def _maybe_self_update(self, phase):
+        if not have_internet():
+            self._self_update_retry_needed = True
+            print(f"Self-update: no internet during {phase}; will retry after Wi-Fi if available.")
+            return
+
+        dialog = self._show_busy_dialog(
+            "Checking for updates",
+            "Checking GitHub for the latest provisioning GUI and defaults.",
+        )
+        try:
+            result = update_current_repo_if_needed(__file__)
+        finally:
+            dialog.grab_release()
+            dialog.destroy()
+            self.update_idletasks()
+
+        if not result["ok"]:
+            print(f"Self-update failed: {result['message']}")
+            messagebox.showwarning(
+                "Update check failed",
+                f"Could not update the provisioning GUI automatically.\n\n{result['message']}",
+            )
+            return
+
+        self._self_update_retry_needed = False
+        print(f"Self-update: {result['message']}")
+        if result["updated"]:
+            self._show_timed_message(
+                "Update installed",
+                "The provisioning GUI was updated. Restarting now so the newest defaults are used.",
+                milliseconds=3000,
+            )
+            os.execv(sys.executable, [sys.executable, *sys.argv])
 
     def _show_default_hint(self, key):
         value = self.answers.get(key, "")
@@ -1110,6 +1233,8 @@ class ProvisioningWizard(tk.Tk):
                         )
                         if result["tested"] and not result["internet_reachable"]:
                             messagebox.showwarning("Wi-Fi connected", result["message"])
+                        if self._self_update_retry_needed:
+                            self._maybe_self_update("post-wifi")
                         break
 
                     self._last_wifi_test_signature = None
