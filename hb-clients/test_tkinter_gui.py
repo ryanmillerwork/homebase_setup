@@ -4,8 +4,8 @@ Provisioning wizard - Tkinter GUI for collecting NVMe provisioning answers.
 
 This mirrors the interactive questions currently asked by
 provision/full_provision_nvme.sh, using the same touch-friendly style as the
-original test wizard. It only collects answers for now; the shell integration
-can read the JSON output in a later step.
+original test wizard. It collects answers, validates Wi-Fi when requested, and
+writes JSON output for the shell integration to read in a later step.
 """
 
 import argparse
@@ -14,10 +14,13 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
+import time
 import tkinter as tk
 from tkinter import messagebox
+import uuid
 
 
 # ---- Theme / sizing ----
@@ -109,6 +112,215 @@ def scan_wifi_ssids():
     return []
 
 
+def run_command(cmd, timeout=30):
+    try:
+        return subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(cmd, 127, "", f"Missing command: {cmd[0]}")
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(
+            cmd,
+            124,
+            exc.stdout or "",
+            exc.stderr or f"Timed out running: {' '.join(cmd)}",
+        )
+
+
+def nmcli(args, timeout=30):
+    return run_command(["nmcli", *args], timeout=timeout)
+
+
+def wifi_interface():
+    result = nmcli(["-t", "-f", "DEVICE,TYPE,STATE", "dev", "status"], timeout=10)
+    if result.returncode != 0:
+        return ""
+
+    fallback = ""
+    for line in result.stdout.splitlines():
+        parts = line.split(":")
+        if len(parts) < 3:
+            continue
+        device, dev_type, state = parts[:3]
+        if dev_type == "wifi" and state == "connected":
+            return device
+        if dev_type == "wifi" and not fallback:
+            fallback = device
+    return fallback
+
+
+def active_connection_for_iface(iface):
+    result = nmcli(["-t", "-f", "NAME,DEVICE", "con", "show", "--active"], timeout=10)
+    if result.returncode != 0:
+        return ""
+    for line in result.stdout.splitlines():
+        name, sep, device = line.rpartition(":")
+        if sep and device == iface:
+            return name
+    return ""
+
+
+def connected_wifi_ssid():
+    result = nmcli(["-t", "-f", "ACTIVE,SSID", "dev", "wifi"], timeout=10)
+    if result.returncode != 0:
+        return ""
+    for line in result.stdout.splitlines():
+        active, sep, ssid = line.partition(":")
+        if sep and active == "yes":
+            return ssid
+    return ""
+
+
+def iface_has_ipv4(iface):
+    result = run_command(["ip", "-4", "addr", "show", "dev", iface], timeout=5)
+    return result.returncode == 0 and re.search(r"^\s*inet\s+", result.stdout, re.MULTILINE)
+
+
+def wait_for_ipv4(iface, timeout_s=90):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if iface_has_ipv4(iface):
+            return True
+        time.sleep(1)
+    return False
+
+
+def internet_reachable_via_iface(iface):
+    targets = [
+        ("1.1.1.1", 443),
+        ("1.0.0.1", 443),
+        ("93.184.216.34", 443),
+        ("93.184.216.34", 80),
+    ]
+    iface_opt = iface.encode("utf-8")
+    if not iface_opt.endswith(b"\0"):
+        iface_opt += b"\0"
+
+    for host, port in targets:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(3)
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, 25, iface_opt)  # SO_BINDTODEVICE
+            sock.connect((host, port))
+            return True
+        except OSError:
+            continue
+        finally:
+            sock.close()
+    return False
+
+
+def safe_connection_name(ssid):
+    safe_ssid = re.sub(r"[^A-Za-z0-9_.-]+", "_", ssid).strip("_")
+    return f"hb-wifi-{safe_ssid or 'network'}-{uuid.uuid4().hex[:8]}"
+
+
+def test_wifi_connection(ssid, password):
+    if not ssid:
+        return {"ok": True, "tested": False, "internet_reachable": False, "message": "Wi-Fi skipped."}
+
+    if shutil.which("nmcli") is None:
+        return {
+            "ok": False,
+            "tested": False,
+            "internet_reachable": False,
+            "message": "nmcli is not available. Install NetworkManager or skip Wi-Fi.",
+        }
+
+    nmcli(["radio", "wifi", "on"], timeout=10)
+    nmcli(["dev", "wifi", "rescan"], timeout=15)
+
+    iface = wifi_interface()
+    if not iface:
+        return {
+            "ok": False,
+            "tested": False,
+            "internet_reachable": False,
+            "message": "No Wi-Fi interface was found.",
+        }
+
+    previous_connection = active_connection_for_iface(iface)
+    connection_name = safe_connection_name(ssid)
+    restore_message = ""
+
+    try:
+        nmcli(["con", "delete", connection_name], timeout=10)
+        nmcli(["-w", "5", "dev", "disconnect", iface], timeout=10)
+
+        result = nmcli(
+            ["-w", "30", "con", "add", "type", "wifi", "ifname", iface, "con-name", connection_name, "ssid", ssid],
+            timeout=35,
+        )
+        if result.returncode != 0:
+            return {
+                "ok": False,
+                "tested": True,
+                "internet_reachable": False,
+                "message": f"Failed to create a temporary Wi-Fi connection for '{ssid}'.",
+            }
+
+        result = nmcli(
+            ["-w", "30", "con", "modify", connection_name, "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password],
+            timeout=35,
+        )
+        if result.returncode != 0:
+            return {
+                "ok": False,
+                "tested": True,
+                "internet_reachable": False,
+                "message": f"NetworkManager rejected the password settings for '{ssid}'.",
+            }
+
+        result = nmcli(["-w", "60", "con", "up", connection_name, "ifname", iface], timeout=70)
+        if result.returncode != 0:
+            return {
+                "ok": False,
+                "tested": True,
+                "internet_reachable": False,
+                "message": f"Failed to connect to '{ssid}'. Check the password and try again.",
+            }
+
+        got_ssid = connected_wifi_ssid()
+        if got_ssid != ssid:
+            return {
+                "ok": False,
+                "tested": True,
+                "internet_reachable": False,
+                "message": f"Connected Wi-Fi mismatch. Expected '{ssid}', got '{got_ssid or '<none>'}'.",
+            }
+
+        if not wait_for_ipv4(iface):
+            return {
+                "ok": False,
+                "tested": True,
+                "internet_reachable": False,
+                "message": f"Connected to '{ssid}', but no IPv4 address was acquired.",
+            }
+
+        internet_ok = internet_reachable_via_iface(iface)
+        message = f"Connected to '{ssid}'."
+        if not internet_ok:
+            message += " Internet probe over Wi-Fi failed; Ethernet may still provide internet."
+
+        return {
+            "ok": True,
+            "tested": True,
+            "internet_reachable": internet_ok,
+            "message": message + restore_message,
+        }
+    finally:
+        if previous_connection and previous_connection != connection_name:
+            result = nmcli(["-w", "20", "con", "up", previous_connection], timeout=25)
+            if result.returncode != 0:
+                restore_message = f" Could not restore previous connection '{previous_connection}'."
+            nmcli(["con", "delete", connection_name], timeout=10)
+
+
 class ProvisioningWizard(tk.Tk):
     def __init__(self, output_path=DEFAULT_OUTPUT):
         super().__init__()
@@ -124,6 +336,7 @@ class ProvisioningWizard(tk.Tk):
         self.config = load_defaults_config(self.defaults_path)
         self.groups = device_groups(self.config)
         self.wifi_ssids = scan_wifi_ssids()
+        self._last_wifi_test_signature = None
 
         self.answers = {
             "wifi_country": DEFAULT_WIFI_COUNTRY,
@@ -339,6 +552,31 @@ class ProvisioningWizard(tk.Tk):
         listbox.bind("<<ListboxSelect>>", on_select)
         return var, listbox
 
+    def _show_busy_dialog(self, title, text):
+        dialog = tk.Toplevel(self)
+        dialog.title(title)
+        dialog.configure(bg=BG)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("620x180+330+220")
+        tk.Label(
+            dialog,
+            text=title,
+            bg=BG,
+            fg=FG,
+            font=FONT_TITLE,
+        ).pack(anchor="w", padx=30, pady=(25, 10))
+        tk.Label(
+            dialog,
+            text=text,
+            bg=BG,
+            fg=FG,
+            font=FONT_LABEL,
+            justify="left",
+        ).pack(anchor="w", padx=30, pady=(0, 25))
+        dialog.update_idletasks()
+        return dialog
+
     def _show_default_hint(self, key):
         value = self.answers.get(key, "")
         if value not in ("", None):
@@ -370,7 +608,7 @@ class ProvisioningWizard(tk.Tk):
     # Steps
     # ------------------------------------------------------------------
     def _step_defaults_group(self):
-        self._add_title("Select defaults group")
+        self._add_title("Choose a device profile")
         if not self.groups:
             self._add_label(
                 f"No device defaults found at {self.defaults_path}. Built-in defaults will be used."
@@ -378,7 +616,7 @@ class ProvisioningWizard(tk.Tk):
             self._defaults_group_var = tk.StringVar(value="")
             return
 
-        self._add_label("Choose a defaults group, or skip defaults:")
+        self._add_label("Pick the lab/device defaults to pre-fill the setup. You can skip this if you are not sure.")
         options = ["(skip defaults)"] + self.groups
         selected = self.answers.get("defaults_group") or "(skip defaults)"
         self._defaults_group_var, _ = self._add_listbox(options, selected)
@@ -391,8 +629,8 @@ class ProvisioningWizard(tk.Tk):
             self._defaults_type_var = tk.StringVar(value="")
             return
 
-        self._add_title("Select device type")
-        self._add_label(f"Defaults group: {group}")
+        self._add_title("Choose the device type")
+        self._add_label("This narrows the profile to the exact setup you are provisioning.")
         types = device_types_for_group(self.config, group)
         self._defaults_type_options = types
         self._defaults_type_var, _ = self._add_listbox(
@@ -429,8 +667,8 @@ class ProvisioningWizard(tk.Tk):
         entry.focus_set()
 
     def _step_screen_width(self):
-        self._add_title("Screen pixel width")
-        self._add_label("Leave blank to skip display mode settings.")
+        self._add_title("Display width")
+        self._add_label("Enter the screen width in pixels.")
         self._show_default_hint("screen_pixels_width")
         self._screen_width_var, entry = self._add_entry(
             self.answers.get("screen_pixels_width", "")
@@ -438,8 +676,8 @@ class ProvisioningWizard(tk.Tk):
         entry.focus_set()
 
     def _step_screen_height(self):
-        self._add_title("Screen pixel height")
-        self._add_label("Leave blank to skip display mode settings.")
+        self._add_title("Display height")
+        self._add_label("Pixels tall.")
         self._show_default_hint("screen_pixels_height")
         self._screen_height_var, entry = self._add_entry(
             self.answers.get("screen_pixels_height", "")
@@ -447,8 +685,8 @@ class ProvisioningWizard(tk.Tk):
         entry.focus_set()
 
     def _step_screen_refresh_rate(self):
-        self._add_title("Screen refresh rate")
-        self._add_label("Refresh rate in Hz. Leave blank to skip display mode settings.")
+        self._add_title("Display refresh rate")
+        self._add_label("Enter the refresh rate in Hz.")
         self._show_default_hint("screen_refresh_rate")
         self._screen_refresh_var, entry = self._add_entry(
             self.answers.get("screen_refresh_rate", "")
@@ -456,8 +694,8 @@ class ProvisioningWizard(tk.Tk):
         entry.focus_set()
 
     def _step_screen_rotation(self):
-        self._add_title("Screen rotation")
-        self._add_label("Enter screen rotation degrees: 0, 90, 180, or 270.")
+        self._add_title("Display rotation")
+        self._add_label("Enter how the screen should be rotated: 0, 90, 180, or 270 degrees.")
         self._show_default_hint("screen_rotation")
         self._screen_rotation_var, entry = self._add_entry(
             self.answers.get("screen_rotation", DEFAULT_SCREEN_ROTATION)
@@ -465,8 +703,8 @@ class ProvisioningWizard(tk.Tk):
         entry.focus_set()
 
     def _step_wifi_ssid(self):
-        self._add_title("Wi-Fi network")
-        self._add_label("Select a discovered network or type an SSID. Leave blank to skip Wi-Fi.")
+        self._add_title("Choose Wi-Fi network")
+        self._add_label("Select a network, type a network name, or leave this blank if using Ethernet.")
 
         if self.wifi_ssids:
             selected = self.answers.get("wifi_ssid", "")
@@ -485,36 +723,40 @@ class ProvisioningWizard(tk.Tk):
     def _step_wifi_password(self):
         ssid = self.answers.get("wifi_ssid", "")
         self._add_title("Wi-Fi password")
-        self._add_label(f"Password for: {ssid}")
+        self._add_label(f"Password for {ssid} (shown). The connection will be tested before continuing.")
         self._wifi_password_var, entry = self._add_entry(
             self.answers.get("wifi_password", "")
         )
         entry.focus_set()
 
     def _step_hostname(self):
-        self._add_title("Hostname")
-        self._add_label("Enter hostname for the provisioned device.")
-        self._show_default_hint("hostname")
+        self._add_title("Name this device")
+        self._add_label(
+            "This name identifies the device on the network, in control tools, and when connecting with SSH."
+        )
+        hostname = self.answers.get("hostname", "")
+        if hostname:
+            self._add_label(f"Suggested: {hostname}", fg=MUTED)
         self._hostname_var, entry = self._add_entry(self.answers.get("hostname", ""))
         entry.focus_set()
 
     def _step_username(self):
-        self._add_title("Username")
-        self._add_label("Enter system login username.")
+        self._add_title("Create login user")
+        self._add_label("Enter the username for signing in and SSH access.")
         self._show_default_hint("username")
         self._username_var, entry = self._add_entry(self.answers.get("username", ""))
         entry.focus_set()
 
     def _step_password(self):
         username = self.answers.get("username", "the user")
-        self._add_title("Password")
-        self._add_label(f"Password for {username} (shown):")
+        self._add_title("Set login password")
+        self._add_label(f"Password for {username} (shown). This will also be used for SSH.")
         self._password_var, entry = self._add_entry(self.answers.get("password", ""))
         entry.focus_set()
 
     def _step_monitor_width(self):
-        self._add_title("Monitor width")
-        self._add_label("Screen width in centimeters for stim2 monitor settings.")
+        self._add_title("Physical screen width")
+        self._add_label("Enter the visible screen width in centimeters.")
         self._show_default_hint("monitor_width_cm")
         self._monitor_width_var, entry = self._add_entry(
             self.answers.get("monitor_width_cm", DEFAULT_MONITOR_WIDTH_CM)
@@ -522,8 +764,8 @@ class ProvisioningWizard(tk.Tk):
         entry.focus_set()
 
     def _step_monitor_height(self):
-        self._add_title("Monitor height")
-        self._add_label("Screen height in centimeters for stim2 monitor settings.")
+        self._add_title("Screen height (cm)")
+        self._add_label("Visible height.")
         self._show_default_hint("monitor_height_cm")
         self._monitor_height_var, entry = self._add_entry(
             self.answers.get("monitor_height_cm", DEFAULT_MONITOR_HEIGHT_CM)
@@ -531,8 +773,8 @@ class ProvisioningWizard(tk.Tk):
         entry.focus_set()
 
     def _step_monitor_distance(self):
-        self._add_title("Monitor distance")
-        self._add_label("Distance to monitor in centimeters for stim2 monitor settings.")
+        self._add_title("Viewing distance")
+        self._add_label("Enter the typical distance from the animal to the screen, in centimeters.")
         self._show_default_hint("monitor_distance_cm")
         self._monitor_distance_var, entry = self._add_entry(
             self.answers.get("monitor_distance_cm", DEFAULT_MONITOR_DISTANCE_CM)
@@ -540,8 +782,8 @@ class ProvisioningWizard(tk.Tk):
         entry.focus_set()
 
     def _step_review(self):
-        self._add_title("Review")
-        self._add_label("Confirm these settings, then tap Finish:")
+        self._add_title("Review setup")
+        self._add_label("Check these settings before starting provisioning.")
 
         review_frame = tk.Frame(self.content, bg=ENTRY_BG, padx=20, pady=15)
         review_frame.pack(fill="x", pady=10)
@@ -553,6 +795,7 @@ class ProvisioningWizard(tk.Tk):
             ("Locale", self.answers.get("locale", "")),
             ("Screen", self._screen_summary()),
             ("Wi-Fi SSID", self.answers.get("wifi_ssid", "(skipped)") or "(skipped)"),
+            ("Wi-Fi test", self._wifi_test_summary()),
             ("Hostname", self.answers.get("hostname", "")),
             ("Username", self.answers.get("username", "")),
             ("Password", self.answers.get("password", "")),
@@ -593,6 +836,15 @@ class ProvisioningWizard(tk.Tk):
         height = self.answers.get("monitor_height_cm", "")
         distance = self.answers.get("monitor_distance_cm", "")
         return f"{width} x {height} cm, distance {distance} cm"
+
+    def _wifi_test_summary(self):
+        if not self.answers.get("wifi_ssid"):
+            return "(skipped)"
+        if not self.answers.get("wifi_tested"):
+            return "Not tested"
+        if self.answers.get("wifi_internet_reachable"):
+            return "Connected, internet reachable"
+        return "Connected, internet not confirmed"
 
     # ------------------------------------------------------------------
     # Validation
@@ -685,9 +937,18 @@ class ProvisioningWizard(tk.Tk):
             if "\n" in value or "\r" in value:
                 messagebox.showerror("Invalid", "Wi-Fi SSID cannot contain newline characters.")
                 return False
+            if value != self.answers.get("wifi_ssid"):
+                self._last_wifi_test_signature = None
+                self.answers.pop("wifi_tested", None)
+                self.answers.pop("wifi_test_ssid", None)
+                self.answers.pop("wifi_internet_reachable", None)
+                self.answers.pop("wifi_test_message", None)
             self.answers["wifi_ssid"] = value
             if not value:
                 self.answers["wifi_password"] = ""
+                self.answers["wifi_tested"] = False
+                self.answers["wifi_internet_reachable"] = False
+                self._last_wifi_test_signature = None
 
         elif step_name == "_step_wifi_password":
             value = self._wifi_password_var.get()
@@ -698,6 +959,38 @@ class ProvisioningWizard(tk.Tk):
                 messagebox.showerror("Invalid", "Wi-Fi password cannot contain newline characters.")
                 return False
             self.answers["wifi_password"] = value
+            ssid = self.answers.get("wifi_ssid", "")
+            test_signature = (ssid, value)
+            already_tested = (
+                self.answers.get("wifi_tested") is True
+                and self.answers.get("wifi_test_ssid") == ssid
+                and self._last_wifi_test_signature == test_signature
+            )
+            if not already_tested:
+                dialog = self._show_busy_dialog(
+                    "Testing Wi-Fi",
+                    "Connecting briefly to verify the password.\n"
+                    "The current Wi-Fi network will be restored afterwards.",
+                )
+                try:
+                    result = test_wifi_connection(ssid, value)
+                finally:
+                    dialog.grab_release()
+                    dialog.destroy()
+                    self.update_idletasks()
+
+                self.answers["wifi_tested"] = result["tested"]
+                self.answers["wifi_test_ssid"] = ssid
+                self.answers["wifi_internet_reachable"] = result["internet_reachable"]
+                self.answers["wifi_test_message"] = result["message"]
+
+                if not result["ok"]:
+                    self._last_wifi_test_signature = None
+                    messagebox.showerror("Wi-Fi test failed", result["message"])
+                    return False
+                self._last_wifi_test_signature = test_signature
+                if result["tested"] and not result["internet_reachable"]:
+                    messagebox.showwarning("Wi-Fi connected", result["message"])
 
         elif step_name == "_step_hostname":
             value = self._hostname_var.get().strip().lower()
