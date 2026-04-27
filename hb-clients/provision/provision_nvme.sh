@@ -1882,7 +1882,7 @@ write_dserv_agent_override_root() {
   cat > "$override_file" <<EOF
 [Service]
 ExecStart=
-ExecStart=/usr/local/bin/dserv-agent --registry ${DEFAULT_MESH_HOST} --workgroup ${DEFAULT_MESH_WORKGROUP} --no-tls -allow-reboot -components /usr/local/dserv/config/components.json
+ExecStart=/usr/local/bin/dserv-agent --no-tls -allow-reboot -components /usr/local/dserv/config/components.json
 EOF
 }
 
@@ -2012,6 +2012,14 @@ install_dserv_latest_root() {
     cp -n "${root_mnt}/usr/local/dserv/local/mesh.tcl.EXAMPLE" "$mesh_target" || true
     if [[ -n "$DEFAULT_MESH_HOST" && -n "$DEFAULT_MESH_WORKGROUP" && -f "$mesh_target" ]]; then
       sed -i -E "s|^mesh_configure[[:space:]]+\"[^\"]*\"[[:space:]]+\"[^\"]*\"|mesh_configure \"${DEFAULT_MESH_HOST}\" \"${DEFAULT_MESH_WORKGROUP}\"|" "$mesh_target"
+    fi
+  fi
+  if [[ -f "${root_mnt}/usr/local/dserv/local/pre-registry.tcl.EXAMPLE" ]]; then
+    local pre_registry_target="${root_mnt}/usr/local/dserv/local/pre-registry.tcl"
+    cp -n "${root_mnt}/usr/local/dserv/local/pre-registry.tcl.EXAMPLE" "$pre_registry_target" || true
+    if [[ -n "$DEFAULT_MESH_HOST" && -n "$DEFAULT_MESH_WORKGROUP" && -f "$pre_registry_target" ]]; then
+      sed -i -E "s|^set env\\(ESS_REGISTRY_URL\\)[[:space:]]+.*|set env(ESS_REGISTRY_URL) ${DEFAULT_MESH_HOST}|" "$pre_registry_target"
+      sed -i -E "s|^set env\\(ESS_WORKGROUP\\)[[:space:]]+.*|set env(ESS_WORKGROUP)    ${DEFAULT_MESH_WORKGROUP}|" "$pre_registry_target"
     fi
   fi
 }
