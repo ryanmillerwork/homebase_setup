@@ -826,10 +826,11 @@ EOF
   chown -R 1000:1000 "$home_dir"
 
   if [[ "$rotate_choice" == "yes" ]]; then
-    # Rotate touchscreen input 180 degrees for the known controller (eGalax 0eef:c002).
+    # Rotate touchscreen input 180 degrees for the known controllers.
     mkdir -p "${root_mnt}/etc/udev/rules.d"
     cat > "${root_mnt}/etc/udev/rules.d/99-touchscreen-rotate.rules" <<'EOF'
 SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="0eef", ATTRS{idProduct}=="c002", ENV{LIBINPUT_CALIBRATION_MATRIX}="-1 0 1 0 -1 1"
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="222a", ATTRS{idProduct}=="0001", ENV{ID_INPUT_TOUCHSCREEN}=="1", ENV{LIBINPUT_CALIBRATION_MATRIX}="-1 0 1 0 -1 1"
 EOF
   fi
 
