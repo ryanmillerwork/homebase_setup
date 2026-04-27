@@ -353,14 +353,14 @@ class ProvisioningWizard(tk.Tk):
             self._step_defaults_group,
             self._step_defaults_device_type,
             self._step_wifi_country,
+            self._step_wifi_ssid,
+            self._step_wifi_password,
             self._step_timezone,
             self._step_locale,
             self._step_screen_width,
             self._step_screen_height,
             self._step_screen_refresh_rate,
             self._step_screen_rotation,
-            self._step_wifi_ssid,
-            self._step_wifi_password,
             self._step_hostname,
             self._step_username,
             self._step_password,
@@ -577,6 +577,11 @@ class ProvisioningWizard(tk.Tk):
         dialog.update_idletasks()
         return dialog
 
+    def _show_timed_message(self, title, text, milliseconds=2000):
+        dialog = self._show_busy_dialog(title, text)
+        dialog.after(milliseconds, dialog.destroy)
+        self.wait_window(dialog)
+
     def _show_default_hint(self, key):
         value = self.answers.get(key, "")
         if value not in ("", None):
@@ -616,9 +621,9 @@ class ProvisioningWizard(tk.Tk):
             self._defaults_group_var = tk.StringVar(value="")
             return
 
-        self._add_label("Pick the lab/device defaults to pre-fill the setup. You can skip this if you are not sure.")
-        options = ["(skip defaults)"] + self.groups
-        selected = self.answers.get("defaults_group") or "(skip defaults)"
+        self._add_label("Pick the lab/device defaults to pre-fill the setup.")
+        options = self.groups
+        selected = self.answers.get("defaults_group") or self.groups[0]
         self._defaults_group_var, _ = self._add_listbox(options, selected)
 
     def _step_defaults_device_type(self):
@@ -694,11 +699,16 @@ class ProvisioningWizard(tk.Tk):
         entry.focus_set()
 
     def _step_screen_rotation(self):
-        self._add_title("Display rotation")
-        self._add_label("Enter how the screen should be rotated: 0, 90, 180, or 270 degrees.")
-        self._show_default_hint("screen_rotation")
+        self._add_title("Display orientation correction")
+        self._add_label(
+            "This compensates for how the physical screen is mounted. If the default is 180, "
+            "that usually means the monitor is intentionally mounted upside down and the "
+            "software rotates the image so it appears upright."
+        )
+        rotation = self.answers.get("screen_rotation", DEFAULT_SCREEN_ROTATION)
+        self._add_label(f"Default: {rotation} (recommended for this device profile)", fg=MUTED)
         self._screen_rotation_var, entry = self._add_entry(
-            self.answers.get("screen_rotation", DEFAULT_SCREEN_ROTATION)
+            rotation
         )
         entry.focus_set()
 
@@ -785,8 +795,37 @@ class ProvisioningWizard(tk.Tk):
         self._add_title("Review setup")
         self._add_label("Check these settings before starting provisioning.")
 
-        review_frame = tk.Frame(self.content, bg=ENTRY_BG, padx=20, pady=15)
-        review_frame.pack(fill="x", pady=10)
+        scroll_shell = tk.Frame(self.content, bg=ENTRY_BG)
+        scroll_shell.pack(fill="both", expand=True, pady=(5, 0))
+
+        canvas = tk.Canvas(
+            scroll_shell,
+            bg=ENTRY_BG,
+            highlightthickness=0,
+            height=230,
+        )
+        scrollbar = tk.Scrollbar(scroll_shell, orient="vertical", command=canvas.yview)
+        review_frame = tk.Frame(canvas, bg=ENTRY_BG, padx=20, pady=15)
+
+        review_window = canvas.create_window((0, 0), window=review_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def update_scroll_region(_event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def update_inner_width(event):
+            canvas.itemconfigure(review_window, width=event.width)
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        review_frame.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", update_inner_width)
+        canvas.bind("<MouseWheel>", on_mousewheel)
+        canvas.bind("<Button-4>", lambda _event: canvas.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda _event: canvas.yview_scroll(1, "units"))
 
         rows = [
             ("Defaults", self.answers.get("defaults_section", "(skipped)")),
@@ -854,8 +893,9 @@ class ProvisioningWizard(tk.Tk):
 
         if step_name == "_step_defaults_group":
             value = self._defaults_group_var.get()
-            if value == "(skip defaults)":
-                value = ""
+            if not value:
+                messagebox.showerror("Required", "Please select a device profile.")
+                return False
             self.answers["defaults_group"] = value
             self.answers.pop("defaults_device_type", None)
             self.answers.pop("defaults_section", None)
@@ -989,6 +1029,11 @@ class ProvisioningWizard(tk.Tk):
                     messagebox.showerror("Wi-Fi test failed", result["message"])
                     return False
                 self._last_wifi_test_signature = test_signature
+                self._show_timed_message(
+                    "Success!",
+                    "Wi-Fi connected successfully!",
+                    milliseconds=2000,
+                )
                 if result["tested"] and not result["internet_reachable"]:
                     messagebox.showwarning("Wi-Fi connected", result["message"])
 

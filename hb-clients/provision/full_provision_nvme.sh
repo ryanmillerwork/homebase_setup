@@ -429,7 +429,9 @@ update_self_if_possible() {
     local updated_script="${repo_root}/hb-clients/provision/full_provision_nvme.sh"
     if [[ -x "$updated_script" ]]; then
       log "Self-update: updated script detected; restarting..."
-      log "Provisioning script updated; restarting..."
+      log "Provisioning script updated. Restarting setup now so the newest provisioning steps are used."
+      log "You may need to answer the early setup questions again; this is expected."
+      sleep 3
       exec sudo HB_SELFUPDATED=1 HB_POST_UPDATE_ATTEMPTED=1 "$updated_script"
     else
       log "WARNING: Updated script not found at ${updated_script}; continuing."
@@ -1794,6 +1796,27 @@ main() {
   start_wifi_scan_background
 
   wifi_country="$(prompt_wifi_country "$DEFAULT_WIFI_COUNTRY")"
+  {
+    read -r wifi_ssid
+    read -r wifi_pass
+  } < <(prompt_wifi)
+
+  if [[ -n "$wifi_ssid" ]]; then
+    if ! connect_wifi_current "$wifi_ssid" "$wifi_pass"; then
+      die "Failed to connect to Wi-Fi SSID '$wifi_ssid'."
+    fi
+  fi
+  if ! have_internet; then
+    die "No internet connectivity. Provide Wi-Fi credentials (or connect ethernet) and re-run."
+  fi
+  log "Internet connectivity verified."
+
+  if [[ "$HB_SELFUPDATE_NO_INTERNET" == "1" ]]; then
+    log "Self-update: retrying now that Wi-Fi is configured..."
+    log "If an update is found, setup will restart so the newest provisioning script is used."
+  fi
+  update_self_if_possible "post" || true
+
   timezone="$(prompt_timezone "$DEFAULT_TIMEZONE")"
   locale="$(prompt_locale "$DEFAULT_LOCALE")"
   {
@@ -1802,11 +1825,6 @@ main() {
     read -r screen_r
     read -r screen_rot
   } < <(prompt_screen_settings)
-
-  {
-    read -r wifi_ssid
-    read -r wifi_pass
-  } < <(prompt_wifi)
 
   local default_hostname=""
   if [[ -r /etc/hostname ]]; then
@@ -1829,21 +1847,6 @@ main() {
   nvme_dev="$(pick_nvme_device)"
   [[ -b "$nvme_dev" ]] || die "Not a block device: $nvme_dev"
   confirm_erase_device "$nvme_dev"
-
-  if [[ -n "$wifi_ssid" ]]; then
-    if ! connect_wifi_current "$wifi_ssid" "$wifi_pass"; then
-      die "Failed to connect to Wi-Fi SSID '$wifi_ssid'."
-    fi
-  fi
-  if ! have_internet; then
-    die "No internet connectivity. Provide Wi-Fi credentials (or connect ethernet) and re-run."
-  fi
-  log "Internet connectivity verified."
-
-  if [[ "$HB_SELFUPDATE_NO_INTERNET" == "1" ]]; then
-    log "Self-update: retrying now that Wi-Fi is configured..."
-  fi
-  update_self_if_possible "post" || true
 
   install_packages_host
 
