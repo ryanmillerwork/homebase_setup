@@ -112,7 +112,7 @@ def scan_wifi_ssids():
     return []
 
 
-def run_command(cmd, timeout=30):
+def run_command(cmd, timeout=30, env=None):
     try:
         return subprocess.run(
             cmd,
@@ -120,6 +120,7 @@ def run_command(cmd, timeout=30):
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=env,
         )
     except FileNotFoundError:
         return subprocess.CompletedProcess(cmd, 127, "", f"Missing command: {cmd[0]}")
@@ -133,7 +134,9 @@ def run_command(cmd, timeout=30):
 
 
 def nmcli(args, timeout=30):
-    return run_command(["nmcli", *args], timeout=timeout)
+    env = os.environ.copy()
+    env["NM_CLI_SECRET_AGENT"] = "0"
+    return run_command(["nmcli", *args], timeout=timeout, env=env)
 
 
 def wifi_interface():
@@ -265,7 +268,21 @@ def test_wifi_connection(ssid, password):
             }
 
         result = nmcli(
-            ["-w", "30", "con", "modify", connection_name, "wifi-sec.key-mgmt", "wpa-psk", "wifi-sec.psk", password],
+            [
+                "-w",
+                "30",
+                "con",
+                "modify",
+                connection_name,
+                "connection.autoconnect",
+                "no",
+                "wifi-sec.key-mgmt",
+                "wpa-psk",
+                "wifi-sec.psk",
+                password,
+                "wifi-sec.psk-flags",
+                "0",
+            ],
             timeout=35,
         )
         if result.returncode != 0:
@@ -318,7 +335,7 @@ def test_wifi_connection(ssid, password):
             result = nmcli(["-w", "20", "con", "up", previous_connection], timeout=25)
             if result.returncode != 0:
                 restore_message = f" Could not restore previous connection '{previous_connection}'."
-            nmcli(["con", "delete", connection_name], timeout=10)
+        nmcli(["con", "delete", connection_name], timeout=10)
 
 
 class ProvisioningWizard(tk.Tk):
@@ -581,6 +598,49 @@ class ProvisioningWizard(tk.Tk):
         dialog = self._show_busy_dialog(title, text)
         dialog.after(milliseconds, dialog.destroy)
         self.wait_window(dialog)
+
+    def _ask_wifi_failure_action(self, message):
+        dialog = tk.Toplevel(self)
+        dialog.title("Wi-Fi test failed")
+        dialog.configure(bg=BG)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry("820x300+230+180")
+
+        tk.Label(
+            dialog,
+            text="Wi-Fi test failed",
+            bg=BG,
+            fg=ERROR,
+            font=FONT_TITLE,
+        ).pack(anchor="w", padx=30, pady=(25, 10))
+        tk.Label(
+            dialog,
+            text=(
+                "We could not connect to this Wi-Fi network from the current location. "
+                "The password may be wrong, or this device may be using Wi-Fi settings "
+                "for another site.\n\n"
+                f"{message}"
+            ),
+            bg=BG,
+            fg=FG,
+            font=FONT_LABEL,
+            justify="left",
+            wraplength=760,
+        ).pack(anchor="w", padx=30, pady=(0, 20))
+
+        action = tk.StringVar(value="")
+        buttons = tk.Frame(dialog, bg=BG)
+        buttons.pack(fill="x", padx=30, pady=(0, 25))
+        self._make_button(buttons, "Try Again", lambda: action.set("retry"), primary=True).pack(side="left")
+        self._make_button(buttons, "Edit Wi-Fi", lambda: action.set("edit")).pack(side="left", padx=15)
+        self._make_button(buttons, "Continue Anyway", lambda: action.set("continue")).pack(side="right")
+
+        dialog.wait_variable(action)
+        choice = action.get()
+        dialog.grab_release()
+        dialog.destroy()
+        return choice
 
     def _show_default_hint(self, key):
         value = self.answers.get(key, "")
@@ -879,11 +939,15 @@ class ProvisioningWizard(tk.Tk):
     def _wifi_test_summary(self):
         if not self.answers.get("wifi_ssid"):
             return "(skipped)"
+        if self.answers.get("wifi_continue_anyway"):
+            return "Failed, continuing anyway"
+        if self.answers.get("wifi_test_passed"):
+            if self.answers.get("wifi_internet_reachable"):
+                return "Connected, internet reachable"
+            return "Connected, internet not confirmed"
         if not self.answers.get("wifi_tested"):
             return "Not tested"
-        if self.answers.get("wifi_internet_reachable"):
-            return "Connected, internet reachable"
-        return "Connected, internet not confirmed"
+        return "Failed"
 
     # ------------------------------------------------------------------
     # Validation
@@ -981,12 +1045,16 @@ class ProvisioningWizard(tk.Tk):
                 self._last_wifi_test_signature = None
                 self.answers.pop("wifi_tested", None)
                 self.answers.pop("wifi_test_ssid", None)
+                self.answers.pop("wifi_test_passed", None)
+                self.answers.pop("wifi_continue_anyway", None)
                 self.answers.pop("wifi_internet_reachable", None)
                 self.answers.pop("wifi_test_message", None)
             self.answers["wifi_ssid"] = value
             if not value:
                 self.answers["wifi_password"] = ""
                 self.answers["wifi_tested"] = False
+                self.answers["wifi_test_passed"] = False
+                self.answers["wifi_continue_anyway"] = False
                 self.answers["wifi_internet_reachable"] = False
                 self._last_wifi_test_signature = None
 
@@ -1007,35 +1075,50 @@ class ProvisioningWizard(tk.Tk):
                 and self._last_wifi_test_signature == test_signature
             )
             if not already_tested:
-                dialog = self._show_busy_dialog(
-                    "Testing Wi-Fi",
-                    "Connecting briefly to verify the password.\n"
-                    "The current Wi-Fi network will be restored afterwards.",
-                )
-                try:
-                    result = test_wifi_connection(ssid, value)
-                finally:
-                    dialog.grab_release()
-                    dialog.destroy()
-                    self.update_idletasks()
+                while True:
+                    dialog = self._show_busy_dialog(
+                        "Testing Wi-Fi",
+                        "Connecting briefly to verify the password.\n"
+                        "The current Wi-Fi network will be restored afterwards.",
+                    )
+                    try:
+                        result = test_wifi_connection(ssid, value)
+                    finally:
+                        dialog.grab_release()
+                        dialog.destroy()
+                        self.update_idletasks()
 
-                self.answers["wifi_tested"] = result["tested"]
-                self.answers["wifi_test_ssid"] = ssid
-                self.answers["wifi_internet_reachable"] = result["internet_reachable"]
-                self.answers["wifi_test_message"] = result["message"]
+                    self.answers["wifi_tested"] = result["tested"]
+                    self.answers["wifi_test_ssid"] = ssid
+                    self.answers["wifi_test_passed"] = result["ok"]
+                    self.answers["wifi_continue_anyway"] = False
+                    self.answers["wifi_internet_reachable"] = result["internet_reachable"]
+                    self.answers["wifi_test_message"] = result["message"]
 
-                if not result["ok"]:
+                    if result["ok"]:
+                        self._last_wifi_test_signature = test_signature
+                        self._show_timed_message(
+                            "Success!",
+                            "Wi-Fi connected successfully!",
+                            milliseconds=2000,
+                        )
+                        if result["tested"] and not result["internet_reachable"]:
+                            messagebox.showwarning("Wi-Fi connected", result["message"])
+                        break
+
                     self._last_wifi_test_signature = None
-                    messagebox.showerror("Wi-Fi test failed", result["message"])
-                    return False
-                self._last_wifi_test_signature = test_signature
-                self._show_timed_message(
-                    "Success!",
-                    "Wi-Fi connected successfully!",
-                    milliseconds=2000,
-                )
-                if result["tested"] and not result["internet_reachable"]:
-                    messagebox.showwarning("Wi-Fi connected", result["message"])
+                    action = self._ask_wifi_failure_action(result["message"])
+                    if action == "retry":
+                        continue
+                    if action == "edit":
+                        self.step_index = self.steps.index(self._step_wifi_ssid)
+                        self._render_current_step()
+                        return False
+
+                    self.answers["wifi_continue_anyway"] = True
+                    self.answers["wifi_test_passed"] = False
+                    self._last_wifi_test_signature = test_signature
+                    break
 
         elif step_name == "_step_hostname":
             value = self._hostname_var.get().strip().lower()
