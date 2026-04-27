@@ -568,8 +568,15 @@ class ProvisioningWizard(tk.Tk):
         self.btn_back = self._make_button(self.nav, "< Back", self._on_back)
         self.btn_back.pack(side="left")
 
-        self.btn_next = self._make_button(self.nav, "Next >", self._on_next, primary=True)
-        self.btn_next.pack(side="right")
+        self.nav_right = tk.Frame(self.nav, bg=BG)
+        self.nav_right.pack(side="right")
+
+        self.btn_recheck_accessories = self._make_button(
+            self.nav_right, "Recheck Accessories", self._recheck_accessories
+        )
+
+        self.btn_next = self._make_button(self.nav_right, "Next >", self._on_next, primary=True)
+        self.btn_next.pack(side="left")
 
         self.progress_label = tk.Label(
             self.nav, text="", bg=BG, fg=FG, font=FONT_LABEL
@@ -602,6 +609,7 @@ class ProvisioningWizard(tk.Tk):
 
     def _render_current_step(self):
         self._clear_content()
+        step_name = self.steps[self.step_index].__name__
         self.progress_label.config(
             text=f"Step {self.step_index + 1} of {len(self.steps)}"
         )
@@ -609,6 +617,12 @@ class ProvisioningWizard(tk.Tk):
         self.btn_next.config(
             text="Finish" if self.step_index == len(self.steps) - 1 else "Next >"
         )
+        if step_name == "_step_accessory_checks":
+            self.btn_recheck_accessories.pack(
+                side="left", padx=(0, 15), before=self.btn_next
+            )
+        else:
+            self.btn_recheck_accessories.pack_forget()
         self.steps[self.step_index]()
 
     def _next_index(self, index):
@@ -643,6 +657,10 @@ class ProvisioningWizard(tk.Tk):
     def _on_back(self):
         if self.step_index > 0:
             self.step_index = self._previous_index(self.step_index)
+            self._render_current_step()
+
+    def _recheck_accessories(self):
+        if self.steps[self.step_index].__name__ == "_step_accessory_checks":
             self._render_current_step()
 
     def _on_finish(self):
@@ -1150,16 +1168,37 @@ class ProvisioningWizard(tk.Tk):
 
     def _render_accessory_results(self):
         results = self.answers.get("accessory_checks", {})
-        button_row = tk.Frame(self.content, bg=BG)
-        button_row.pack(fill="x", pady=(5, 8))
-        self._make_button(
-            button_row,
-            "Recheck Accessories",
-            lambda: self._render_current_step(),
-        ).pack(side="left")
+        scroll_shell = tk.Frame(self.content, bg=ENTRY_BG)
+        scroll_shell.pack(fill="both", expand=True, pady=(10, 0))
 
-        rows = tk.Frame(self.content, bg=ENTRY_BG, padx=20, pady=10)
-        rows.pack(fill="x", pady=(0, 10))
+        canvas = tk.Canvas(
+            scroll_shell,
+            bg=ENTRY_BG,
+            highlightthickness=0,
+            height=230,
+        )
+        scrollbar = tk.Scrollbar(scroll_shell, orient="vertical", command=canvas.yview)
+        rows = tk.Frame(canvas, bg=ENTRY_BG, padx=20, pady=15)
+
+        rows_window = canvas.create_window((0, 0), window=rows, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def update_scroll_region(_event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def update_inner_width(event):
+            canvas.itemconfigure(rows_window, width=event.width)
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        rows.bind("<Configure>", update_scroll_region)
+        canvas.bind("<Configure>", update_inner_width)
+        canvas.bind("<MouseWheel>", on_mousewheel)
+        canvas.bind("<Button-4>", lambda _event: canvas.yview_scroll(-1, "units"))
+        canvas.bind("<Button-5>", lambda _event: canvas.yview_scroll(1, "units"))
 
         for key, label in ACCESSORY_CHECK_ITEMS:
             result = results.get(key, {})
