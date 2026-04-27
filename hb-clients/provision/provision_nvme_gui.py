@@ -1150,8 +1150,16 @@ class ProvisioningWizard(tk.Tk):
 
     def _render_accessory_results(self):
         results = self.answers.get("accessory_checks", {})
-        rows = tk.Frame(self.content, bg=ENTRY_BG, padx=20, pady=15)
-        rows.pack(fill="x", pady=(10, 15))
+        button_row = tk.Frame(self.content, bg=BG)
+        button_row.pack(fill="x", pady=(5, 8))
+        self._make_button(
+            button_row,
+            "Recheck Accessories",
+            lambda: self._render_current_step(),
+        ).pack(side="left")
+
+        rows = tk.Frame(self.content, bg=ENTRY_BG, padx=20, pady=10)
+        rows.pack(fill="x", pady=(0, 10))
 
         for key, label in ACCESSORY_CHECK_ITEMS:
             result = results.get(key, {})
@@ -1187,14 +1195,6 @@ class ProvisioningWizard(tk.Tk):
                 wraplength=760,
                 justify="left",
             ).pack(side="left", fill="x", expand=True)
-
-        button_row = tk.Frame(self.content, bg=BG)
-        button_row.pack(fill="x", pady=(0, 5))
-        self._make_button(
-            button_row,
-            "Recheck",
-            lambda: self._render_current_step(),
-        ).pack(side="left")
 
     def _step_review(self):
         self._add_title("Review setup")
