@@ -509,7 +509,13 @@ class ProvisioningWizard(tk.Tk):
 
     def _add_label(self, text, fg=FG):
         tk.Label(
-            self.content, text=text, bg=BG, fg=fg, font=FONT_LABEL, justify="left"
+            self.content,
+            text=text,
+            bg=BG,
+            fg=fg,
+            font=FONT_LABEL,
+            justify="left",
+            wraplength=1160,
         ).pack(anchor="w", pady=(10, 5))
 
     def _add_entry(self, initial=""):
