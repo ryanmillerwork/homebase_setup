@@ -2,10 +2,9 @@
 """
 Provisioning wizard - Tkinter GUI for collecting NVMe provisioning answers.
 
-This mirrors the interactive questions currently asked by
-provision/full_provision_nvme.sh, using the same touch-friendly style as the
-original test wizard. It collects answers, validates Wi-Fi when requested, and
-writes JSON output for the shell integration to read in a later step.
+This replaces the old interactive shell questions with a touch-friendly flow.
+It collects answers, validates Wi-Fi when requested, writes JSON output, and
+launches provision_nvme.sh after the user confirms the destructive erase step.
 """
 
 import argparse
@@ -14,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import socket
 import subprocess
@@ -31,6 +31,7 @@ ACCENT = "#89b4fa"
 ACCENT_ACTIVE = "#74a0e8"
 ENTRY_BG = "#313244"
 ERROR = "#f38ba8"
+SUCCESS = "#a6e3a1"
 MUTED = "#a6adc8"
 
 FONT_TITLE = ("DejaVu Sans", 22, "bold")
@@ -47,10 +48,16 @@ DEFAULT_MONITOR_DISTANCE_CM = "30.0"
 DEFAULT_SCREEN_ROTATION = "0"
 DEFAULT_OUTPUT = "/tmp/hb_provision_answers.json"
 WIFI_SCAN_FILE = os.environ.get("HB_WIFI_SCAN_FILE", "/tmp/hb_wifi_scan_ssids.txt")
+ACCESSORY_CHECK_ITEMS = [
+    ("touchscreen", "Touchscreen"),
+    ("juicer", "Juicer"),
+    ("power_monitor", "Power monitor"),
+    ("camera", "Camera"),
+]
 
 
 def script_defaults_file():
-    return Path(__file__).resolve().parent / "provision" / "device_defaults.ini"
+    return Path(__file__).resolve().parent / "device_defaults.ini"
 
 
 def load_defaults_config(path):
@@ -132,6 +139,72 @@ def run_command(cmd, timeout=30, env=None):
             exc.stdout or "",
             exc.stderr or f"Timed out running: {' '.join(cmd)}",
         )
+
+
+def accessory_result(detected, detail):
+    return {"detected": bool(detected), "detail": detail}
+
+
+def detect_touchscreen(lsusb_output):
+    for line in lsusb_output.splitlines():
+        if re.search(r"\bID\s+(0eef:c002|222a:0001)\b", line, re.IGNORECASE):
+            return accessory_result(True, line.strip())
+    return accessory_result(False, "USB touchscreen controller 0eef:c002 or 222a:0001 not found.")
+
+
+def detect_juicer(lsusb_output):
+    for line in lsusb_output.splitlines():
+        if re.search(r"juicer", line, re.IGNORECASE):
+            return accessory_result(True, line.strip())
+    return accessory_result(False, "USB device containing 'juicer' not found.")
+
+
+def detect_power_monitor():
+    serial_dir = Path("/dev/serial/by-id")
+    matches = sorted(serial_dir.glob("usb-Homebase_power_monitor_*-if00")) if serial_dir.is_dir() else []
+    if matches:
+        return accessory_result(True, str(matches[0]))
+    return accessory_result(False, "/dev/serial/by-id/usb-Homebase_power_monitor_*-if00 not found.")
+
+
+def detect_camera():
+    result = run_command(["rpicam-hello", "--list-cameras"], timeout=10)
+    output = "\n".join(part.strip() for part in [result.stdout, result.stderr] if part and part.strip())
+    if result.returncode == 127:
+        return accessory_result(False, result.stderr.strip())
+
+    camera_lines = [
+        line.strip()
+        for line in output.splitlines()
+        if re.match(r"^\s*\d+\s*:", line)
+    ]
+    if result.returncode == 0 and camera_lines:
+        return accessory_result(True, camera_lines[0])
+    if output:
+        detail = output.splitlines()[0].strip()
+    else:
+        detail = "No cameras reported by rpicam-hello --list-cameras."
+    return accessory_result(False, detail)
+
+
+def check_accessories():
+    lsusb_result = run_command(["lsusb"], timeout=5)
+    lsusb_output = lsusb_result.stdout if lsusb_result.returncode == 0 else ""
+    missing_lsusb = lsusb_result.returncode == 127
+
+    if missing_lsusb:
+        touchscreen = accessory_result(False, lsusb_result.stderr.strip())
+        juicer = accessory_result(False, lsusb_result.stderr.strip())
+    else:
+        touchscreen = detect_touchscreen(lsusb_output)
+        juicer = detect_juicer(lsusb_output)
+
+    return {
+        "touchscreen": touchscreen,
+        "juicer": juicer,
+        "power_monitor": detect_power_monitor(),
+        "camera": detect_camera(),
+    }
 
 
 def have_internet():
@@ -453,6 +526,7 @@ class ProvisioningWizard(tk.Tk):
             "monitor_height_cm": DEFAULT_MONITOR_HEIGHT_CM,
             "monitor_distance_cm": DEFAULT_MONITOR_DISTANCE_CM,
         }
+        self._apply_initial_defaults_from_env()
 
         self.steps = [
             self._step_defaults_group,
@@ -460,6 +534,7 @@ class ProvisioningWizard(tk.Tk):
             self._step_wifi_country,
             self._step_wifi_ssid,
             self._step_wifi_password,
+            self._step_accessory_checks,
             self._step_timezone,
             self._step_locale,
             self._step_screen_width,
@@ -571,21 +646,70 @@ class ProvisioningWizard(tk.Tk):
             self._render_current_step()
 
     def _on_finish(self):
+        if not self._confirm_destructive_provision():
+            return
+
         try:
-            Path(self.output_path).write_text(
+            output_path = Path(self.output_path)
+            output_path.write_text(
                 json.dumps(self.answers, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
+            os.chmod(output_path, 0o600)
         except OSError as exc:
             messagebox.showerror("Save failed", f"Could not write {self.output_path}:\n{exc}")
             return
 
         print(json.dumps(self.answers, indent=2, sort_keys=True))
-        messagebox.showinfo(
-            "Done",
-            f"Provisioning answers saved to:\n{self.output_path}",
-        )
+        if not self._launch_backend():
+            return
         self.destroy()
+
+    def _confirm_destructive_provision(self):
+        proceed = messagebox.askyesno(
+            "Erase NVMe and provision?",
+            "Provisioning will erase the selected NVMe disk and reboot this device when complete.\n\n"
+            "Start provisioning now?",
+        )
+        if not proceed:
+            return False
+
+        self.answers["confirm_erase"] = "ERASE"
+        return True
+
+    def _launch_backend(self):
+        backend = Path(__file__).resolve().parent / "provision_nvme.sh"
+        if not backend.is_file():
+            messagebox.showerror("Backend missing", f"Could not find provisioning backend:\n{backend}")
+            return False
+
+        launched_in_terminal = False
+        terminal = shutil.which("x-terminal-emulator")
+        if terminal:
+            command = (
+                f"cd {shlex.quote(str(backend.parent))} && "
+                f"sudo {shlex.quote(str(backend))} --answers {shlex.quote(str(self.output_path))}; "
+                "status=$?; echo; "
+                "echo \"Provisioning exited with status ${status}. Press Enter to close.\"; "
+                "read -r _; exit ${status}"
+            )
+            args = [terminal, "-e", "bash", "-lc", command]
+            launched_in_terminal = True
+        else:
+            args = ["sudo", str(backend), "--answers", str(self.output_path)]
+
+        try:
+            subprocess.Popen(args)
+        except OSError as exc:
+            messagebox.showerror("Launch failed", f"Could not start provisioning backend:\n{exc}")
+            return False
+
+        messagebox.showinfo(
+            "Provisioning started",
+            "The NVMe provisioning backend is running"
+            + (" in a terminal window." if launched_in_terminal else "."),
+        )
+        return True
 
     # ------------------------------------------------------------------
     # Helpers for building consistent step UIs
@@ -776,6 +900,29 @@ class ProvisioningWizard(tk.Tk):
         if value not in ("", None):
             self._add_label(f"Default: {value}", fg=MUTED)
 
+    def _apply_initial_defaults_from_env(self):
+        section = os.environ.get("DEVICE_DEFAULTS_SECTION", "").strip()
+        group = os.environ.get("DEVICE_DEFAULTS_GROUP", "").strip()
+        subgroup = os.environ.get("DEVICE_DEFAULTS_SUBGROUP", "").strip()
+
+        if section and self.config.has_section(section):
+            parts = section.split(".")
+            if len(parts) >= 3:
+                self.answers["defaults_group"] = ".".join(parts[:-1])
+                self.answers["defaults_device_type"] = parts[-1]
+                self.answers["defaults_section"] = section
+                self._apply_defaults_section(section)
+            return
+
+        if group in self.groups:
+            self.answers["defaults_group"] = group
+            if subgroup:
+                candidate = f"{group}.{subgroup}"
+                if self.config.has_section(candidate):
+                    self.answers["defaults_device_type"] = subgroup
+                    self.answers["defaults_section"] = candidate
+                    self._apply_defaults_section(candidate)
+
     def _apply_defaults_section(self, section):
         if not section or not self.config.has_section(section):
             return
@@ -928,6 +1075,14 @@ class ProvisioningWizard(tk.Tk):
         )
         entry.focus_set()
 
+    def _step_accessory_checks(self):
+        self._add_title("Accessory checks")
+        self._add_label(
+            "These checks confirm the expected accessories are visible from the current system. "
+            "Missing accessories are shown as warnings and do not block provisioning."
+        )
+        self._run_accessory_checks()
+
     def _step_hostname(self):
         self._add_title("Name this device")
         self._add_label(
@@ -980,6 +1135,67 @@ class ProvisioningWizard(tk.Tk):
         )
         entry.focus_set()
 
+    def _run_accessory_checks(self):
+        dialog = self._show_busy_dialog(
+            "Checking accessories",
+            "Looking for touchscreen, juicer, power monitor, and camera.",
+        )
+        try:
+            self.answers["accessory_checks"] = check_accessories()
+        finally:
+            dialog.grab_release()
+            dialog.destroy()
+            self.update_idletasks()
+        self._render_accessory_results()
+
+    def _render_accessory_results(self):
+        results = self.answers.get("accessory_checks", {})
+        rows = tk.Frame(self.content, bg=ENTRY_BG, padx=20, pady=15)
+        rows.pack(fill="x", pady=(10, 15))
+
+        for key, label in ACCESSORY_CHECK_ITEMS:
+            result = results.get(key, {})
+            detected = bool(result.get("detected"))
+            detail = result.get("detail", "")
+            row = tk.Frame(rows, bg=ENTRY_BG)
+            row.pack(fill="x", pady=4)
+            tk.Label(
+                row,
+                text=label,
+                bg=ENTRY_BG,
+                fg=FG,
+                font=FONT_LABEL,
+                width=18,
+                anchor="w",
+            ).pack(side="left")
+            tk.Label(
+                row,
+                text="Detected" if detected else "Not detected",
+                bg=ENTRY_BG,
+                fg=SUCCESS if detected else ERROR,
+                font=FONT_LABEL,
+                width=14,
+                anchor="w",
+            ).pack(side="left")
+            tk.Label(
+                row,
+                text=detail,
+                bg=ENTRY_BG,
+                fg=MUTED,
+                font=FONT_LABEL,
+                anchor="w",
+                wraplength=760,
+                justify="left",
+            ).pack(side="left", fill="x", expand=True)
+
+        button_row = tk.Frame(self.content, bg=BG)
+        button_row.pack(fill="x", pady=(0, 5))
+        self._make_button(
+            button_row,
+            "Recheck",
+            lambda: self._render_current_step(),
+        ).pack(side="left")
+
     def _step_review(self):
         self._add_title("Review setup")
         self._add_label("Check these settings before starting provisioning.")
@@ -1024,6 +1240,7 @@ class ProvisioningWizard(tk.Tk):
             ("Screen", self._screen_summary()),
             ("Wi-Fi SSID", self.answers.get("wifi_ssid", "(skipped)") or "(skipped)"),
             ("Wi-Fi test", self._wifi_test_summary()),
+            ("Accessory checks", self._accessory_check_summary()),
             ("Hostname", self.answers.get("hostname", "")),
             ("Username", self.answers.get("username", "")),
             ("Password", self.answers.get("password", "")),
@@ -1077,6 +1294,25 @@ class ProvisioningWizard(tk.Tk):
         if not self.answers.get("wifi_tested"):
             return "Not tested"
         return "Failed"
+
+    def _accessory_check_summary(self):
+        checks = self.answers.get("accessory_checks", {})
+        if not checks:
+            return "Not checked"
+        detected = [
+            label
+            for key, label in ACCESSORY_CHECK_ITEMS
+            if checks.get(key, {}).get("detected")
+        ]
+        missing = [
+            label
+            for key, label in ACCESSORY_CHECK_ITEMS
+            if not checks.get(key, {}).get("detected")
+        ]
+        summary = f"{len(detected)}/{len(ACCESSORY_CHECK_ITEMS)} detected"
+        if missing:
+            summary += f"; missing: {', '.join(missing)}"
+        return summary
 
     # ------------------------------------------------------------------
     # Validation
